@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlalchemy
+alembic
+python-dotenv
+black
+ruff
+pytest
+httpx
+pre-commit
