@@ -7,6 +7,7 @@ from .database import Base, engine, get_db
 from .logging_config import configure_logging
 from .prices_database import PricesBase, ensure_schema_migrations, prices_engine
 from .routers import data as data_router
+from .routers import strategies as strategies_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -43,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok", "service": "sigmaqlab"}
 
     app.include_router(data_router.router)
+    app.include_router(strategies_router.router)
 
     return app
 

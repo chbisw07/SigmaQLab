@@ -1,7 +1,13 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from pydantic_settings import SettingsConfigDict
+
+
+# -------------------------
+# Data service schemas
+# -------------------------
 
 
 class DataFetchRequest(BaseModel):
@@ -61,3 +67,98 @@ class PriceBarPreview(BaseModel):
     close: float
     volume: float | None
     source: str
+
+
+# -------------------------
+# Strategy service schemas
+# -------------------------
+
+
+class StrategyBase(BaseModel):
+    """Common fields for Strategy models."""
+
+    name: str = Field(..., description="Human-friendly strategy name")
+    code: str = Field(..., description="Short identifier used in code/backtests")
+    category: str | None = Field(
+        default=None,
+        description="Category: trend, mean_reversion, breakout, overlay, risk_filter",
+    )
+    description: str | None = None
+    status: str | None = Field(
+        default=None,
+        description="experimental, candidate, paper, live, deprecated",
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="Optional list of tags, e.g. ['intraday', 'nifty']",
+    )
+    linked_sigma_trader_id: str | None = None
+    linked_tradingview_template: str | None = None
+    live_ready: bool | None = None
+
+
+class StrategyCreate(StrategyBase):
+    """Payload to create a new strategy."""
+
+    pass
+
+
+class StrategyUpdate(BaseModel):
+    """Payload to update an existing strategy (partial update)."""
+
+    name: str | None = None
+    code: str | None = None
+    category: str | None = None
+    description: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+    linked_sigma_trader_id: str | None = None
+    linked_tradingview_template: str | None = None
+    live_ready: bool | None = None
+
+
+class StrategyRead(StrategyBase):
+    """Strategy representation returned by the API."""
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = SettingsConfigDict(from_attributes=True)
+
+
+class StrategyParameterBase(BaseModel):
+    """Common fields for StrategyParameter models."""
+
+    label: str = Field(..., description="e.g. default, aggressive, conservative")
+    params: dict[str, Any] = Field(
+        ...,
+        description="Parameter set as key-value map",
+    )
+    notes: str | None = None
+
+
+class StrategyParameterCreate(StrategyParameterBase):
+    """Payload to create a StrategyParameter."""
+
+    pass
+
+
+class StrategyParameterUpdate(BaseModel):
+    """Payload to update a StrategyParameter (partial)."""
+
+    label: str | None = None
+    params: dict[str, Any] | None = None
+    notes: str | None = None
+
+
+class StrategyParameterRead(StrategyParameterBase):
+    """StrategyParameter representation returned by the API."""
+
+    id: int
+    strategy_id: int
+    created_at: datetime
+    # Map ORM attribute `params_json` to field `params`.
+    params: dict[str, Any] = Field(validation_alias="params_json")
+
+    model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
