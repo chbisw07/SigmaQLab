@@ -7,8 +7,7 @@ from app.prices_database import PricesBase, prices_engine
 
 
 def setup_function() -> None:
-    # Ensure a clean prices DB for this test module.
-    PricesBase.metadata.drop_all(bind=prices_engine)
+    # Ensure tables exist for this test module without wiping existing data.
     PricesBase.metadata.create_all(bind=prices_engine)
 
 
@@ -41,11 +40,16 @@ def test_data_summary_and_preview_from_csv(tmp_path: Path) -> None:
     res_sum = client.get("/api/data/summary")
     assert res_sum.status_code == 200
     summary = res_sum.json()
-    assert len(summary) == 1
-    item = summary[0]
-    assert item["symbol"] == "TEST2"
-    assert item["exchange"] == "NSE"
-    assert item["timeframe"] == "5m"
+    # Find the row corresponding to our test symbol/timeframe.
+    matching = [
+        item
+        for item in summary
+        if item["symbol"] == "TEST2"
+        and item["exchange"] == "NSE"
+        and item["timeframe"] == "5m"
+    ]
+    assert matching, "Expected TEST2 / 5m entry in data summary"
+    item = matching[0]
     assert item["bar_count"] == 2
 
     # Preview endpoint should return the actual bars.

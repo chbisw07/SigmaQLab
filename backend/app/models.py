@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
@@ -18,11 +18,15 @@ class Strategy(Base):
     tags = Column(JSON, nullable=True)
     linked_sigma_trader_id = Column(String, nullable=True)
     linked_tradingview_template = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
@@ -38,7 +42,11 @@ class StrategyParameter(Base):
     label = Column(String, nullable=False)
     params_json = Column(JSON, nullable=False)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     strategy = relationship("Strategy", back_populates="parameters")
     backtests = relationship("Backtest", back_populates="parameters")
@@ -60,7 +68,11 @@ class Backtest(Base):
     status = Column(String, nullable=False, default="pending")
     metrics_json = Column(JSON, nullable=True)
     data_source = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     finished_at = Column(DateTime, nullable=True)
 
     strategy = relationship("Strategy", back_populates="backtests")

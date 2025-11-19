@@ -16,7 +16,7 @@ def test_strategy_and_parameters_crud() -> None:
     # Create a strategy
     create_payload = {
         "name": "SMA Crossover",
-        "code": "SMA_X",
+        "code": "TEST_SMA_X",
         "category": "trend",
         "description": "Simple SMA crossover strategy",
         "status": "experimental",
@@ -28,17 +28,25 @@ def test_strategy_and_parameters_crud() -> None:
 
     resp = client.post("/api/strategies", json=create_payload)
     if resp.status_code == 409:
-        # Strategy already exists from a previous test run; fetch it.
+        # Strategy already exists (possibly created via UI or a previous test run);
+        # fetch it and normalise key fields so the rest of the test is deterministic.
         list_resp = client.get("/api/strategies")
         assert list_resp.status_code == 200
         existing = [s for s in list_resp.json() if s["code"] == create_payload["code"]]
-        assert existing, "Expected existing strategy with code SMA_X"
+        assert existing, "Expected existing strategy with code TEST_SMA_X"
         strategy = existing[0]
+        # If tags differ from what this test expects, update them so assertions below
+        # remain stable across manual edits.
+        if strategy.get("tags") != create_payload["tags"]:
+            patch = {"tags": create_payload["tags"]}
+            update_resp = client.put(f"/api/strategies/{strategy['id']}", json=patch)
+            assert update_resp.status_code == 200, update_resp.text
+            strategy = update_resp.json()
     else:
         assert resp.status_code == 201, resp.text
         strategy = resp.json()
     strategy_id = strategy["id"]
-    assert strategy["code"] == "SMA_X"
+    assert strategy["code"] == "TEST_SMA_X"
     assert strategy["tags"] == ["intraday", "nifty"]
 
     # List strategies
@@ -51,7 +59,7 @@ def test_strategy_and_parameters_crud() -> None:
     resp = client.get(f"/api/strategies/{strategy_id}")
     assert resp.status_code == 200
     fetched = resp.json()
-    assert fetched["code"] == "SMA_X"
+    assert fetched["code"] == "TEST_SMA_X"
 
     # Update the strategy
     update_payload = {

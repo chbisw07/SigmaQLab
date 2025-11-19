@@ -809,3 +809,220 @@ Notes:
   - `S03_G02_TF002` (strategy detail view),
   - `S03_G02_TF003` (parameter sets UI)
   now have `status = implemented` and short remarks describing the UI work.
+
+---
+
+## Sprint S04 – Backtest Engine (G01)
+
+**Group:** G01 – Backtest engine: Backtrader integration and engine interface
+**Tasks:** S04_G01_TB001–TB003
+**Status (Codex):** implemented
+
+### S04_G01_TB001 – Strategy engine interface & BacktestResult models
+
+- Added a dedicated backtest engine module that defines simple, explicit types for running single backtests:
+  - File: `backend/app/backtest_engine.py`.
+  - Core dataclasses:
+    - `BacktestConfig`:
+      - `strategy_code`, `symbol`, `timeframe`, `initial_capital`, `params: dict[str, Any]`.
+      - Represents the minimal configuration needed for a single-symbol backtest.
+    - `EquityPoint`:
+      - `timestamp`, `equity` – one point on the equity curve.
+    - `BacktestResult`:
+      - `strategy_code`, `symbol`, `timeframe`,
+      - `equity_curve: list[EquityPoint]`,
+      - `metrics: dict[str, float]` (currently includes `initial_capital`, `final_value`, `pnl`).
+- This interface allows future engines (e.g., vectorized backtests) to return the same shape, even if their internals differ.
+
+### S04_G01_TB002 – Backtrader engine integration
+
+- Implemented a Backtrader-backed engine that conforms to the `BacktestConfig`/`BacktestResult` interface:
+  - Class: `BacktraderEngine` in `backend/app/backtest_engine.py`.
+  - Optional dependency:
+    - `backtrader` is imported lazily and the engine raises a clear `RuntimeError` if it is not installed.
+    - Tests for this module are marked to skip when `backtrader` is missing, so your test suite stays green while keeping the engine optional.
+  - Reference strategy:
+    - `SmaCrossStrategy`:
+      - Simple SMA crossover using Backtrader indicators and a `CrossOver` signal.
+      - Parameters: `fast`, `slow`.
+      - Records equity on every bar into `self._equity_curve`.
+    - Registry:
+      - `STRATEGY_REGISTRY = {"SMA_X": SmaCrossStrategy}` so `strategy_code="SMA_X"` is wired to this implementation.
+  - `BacktraderEngine.run(config, price_data)`:
+    - Expects a `pandas.DataFrame` with a `DatetimeIndex` and `open/high/low/close/volume` columns.
+    - Sets up `Cerebro`, configures initial cash, adds the registered strategy with `config.params`, and feeds the data via `bt.feeds.PandasData`.
+    - Runs the engine, pulls the strategy’s recorded equity curve, and computes basic metrics (`final_value`, `initial_capital`, `pnl`) for `BacktestResult`.
+
+### S04_G01_TB003 – BacktestService using the engine
+
+- Added a service layer that connects the engine to the existing meta and prices databases:
+  - File: `backend/app/backtest_service.py`.
+  - Class: `BacktestService`:
+    - Takes an optional `BacktraderEngine` instance (defaults to a new one).
+    - Method `run_single_backtest(...)`:
+      - Inputs:
+        - `meta_db: Session`, `prices_db: Session`,
+        - `strategy_id`, `symbol`, `timeframe`, `start`, `end`,
+        - `initial_capital`,
+        - optional `params` (inline overrides) and `params_id` (references a `StrategyParameter`),
+        - optional `price_source` flag (`kite`, `yfinance`, `synthetic`, etc.).
+      - Behavior:
+        - Loads the `Strategy` from the meta DB; fails fast if not found.
+        - Resolves parameters by merging:
+          - `StrategyParameter.params_json` (when `params_id` is provided),
+          - Inline `params` overrides.
+        - Queries `PriceBar` rows from the prices DB for the given `symbol/timeframe/[start,end]` window.
+        - Converts them into a `pandas.DataFrame` and builds a `BacktestConfig`.
+        - Runs the Backtrader engine to obtain a `BacktestResult`.
+        - Persists a `Backtest` record in `sigmaqlab_meta.db`:
+          - Fields: `strategy_id`, `params_id`, `engine="backtrader"`, `symbols_json=[symbol]`, `timeframe`, `start_date`, `end_date`, `initial_capital`, `status="completed"`, `metrics_json=result.metrics`, `data_source=price_source`.
+        - Returns the persisted `Backtest` ORM object.
+
+### Tests for S04/G01
+
+- File: `backend/tests/test_backtest_engine_and_service.py`.
+  - Skips all tests when `backtrader` is not installed (module-level `pytestmark`), so your CI/dev loop doesn’t depend on having Backtrader in every environment.
+  - `test_backtrader_engine_runs_on_synthetic_data`:
+    - Builds an upward-trending synthetic OHLCV series in a DataFrame.
+    - Constructs a `BacktestConfig` with `strategy_code="SMA_X"`, `params={"fast": 5, "slow": 20}`, and runs the engine.
+    - Asserts:
+      - Strategy/symbol/timeframe are as expected.
+      - Equity curve length equals number of bars.
+      - `metrics["final_value"]` exists and is positive.
+  - `test_backtest_service_persists_backtest_record`:
+    - Clears and recreates meta and prices DB schemas.
+    - Inserts:
+      - A `Strategy` with `code="SMA_X"`.
+      - A `StrategyParameter` with `params_json={"fast": 5, "slow": 20}`.
+      - Synthetic OHLCV rows in `PriceBar` for symbol `TEST`.
+    - Invokes `BacktestService.run_single_backtest(...)` with `params_id` pointing to the parameter set.
+    - Asserts:
+      - A `Backtest` row is created with a non-null id.
+      - `engine == "backtrader"`, `symbols_json == ["TEST"]`.
+      - `metrics_json` is populated and `status == "completed"`.
+
+### Sprint workbook updates for S04/G01
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S04_G01_TB001` – Strategy engine interface and BacktestResult models,
+  - `S04_G01_TB002` – Backtrader integration as the primary engine,
+  - `S04_G01_TB003` – BacktestService wired to the engine and databases,
+  now have `status = implemented` and concise remarks reflecting the above work.
+
+---
+
+## Sprint S04 – Backtest execution API & UI (G02)
+
+**Group:** G02 – Backtest execution: API endpoint and simple UI trigger
+**Tasks:** S04_G02_TB001–TB003
+**Status (Codex):** implemented (with a minor UI placement deviation for TF002)
+
+### S04_G02_TB001 – Backtest execution API
+
+- Implemented a dedicated Backtests API router to expose the backtest engine and service via HTTP.
+- Schemas:
+  - `backend/app/schemas.py`:
+    - `BacktestCreateRequest`:
+      - Fields: `strategy_id`, optional `params_id`, `symbol`, `timeframe`, `start_date`, `end_date`, `initial_capital`, optional `params` (inline overrides), optional `price_source`.
+      - Mirrors the `BacktestService.run_single_backtest(...)` signature and keeps the request payload concise.
+    - `BacktestRead`:
+      - Maps the `Backtest` ORM model to API shape, including:
+        - `engine`, `symbols_json`, `timeframe`, `start_date`, `end_date`, `initial_capital`, `status`, `data_source`, `created_at`, `finished_at`,
+        - `metrics` field backed by the `metrics_json` column (via `validation_alias`).
+- Router:
+  - File: `backend/app/routers/backtests.py`.
+  - Endpoints:
+    - `POST /api/backtests`:
+      - Accepts `BacktestCreateRequest`.
+      - Uses `BacktestService` with injected `meta_db` and `prices_db` sessions.
+      - Converts `start_date`/`end_date` to datetime window boundaries.
+      - Handles errors:
+        - `ValueError` → HTTP 400 (e.g. missing strategy, params, or price data).
+        - `RuntimeError` → HTTP 500 (e.g. Backtrader not installed).
+      - Returns a `BacktestRead` representation of the persisted `Backtest` record on success.
+    - `GET /api/backtests`:
+      - Lists backtests ordered by `created_at` descending, returning `List[BacktestRead]`.
+    - `GET /api/backtests/{backtest_id}`:
+      - Returns a single `BacktestRead` or 404 if not found.
+- Tests:
+  - File: `backend/tests/test_backtests_api.py`.
+  - Skips when `backtrader` is not installed.
+  - `test_create_backtest_via_api`:
+    - Seeds a `Strategy` with `code="SMA_X"`, a `StrategyParameter`, and synthetic `PriceBar` rows.
+    - Calls `POST /api/backtests` with appropriate dates and `initial_capital`.
+    - Asserts:
+      - Response status `201`, `engine == "backtrader"`, `symbols_json == ["TESTBT"]`, `status == "completed"`, and `metrics.final_value` present.
+    - Verifies that the created backtest appears in `GET /api/backtests`.
+
+How to verify:
+
+- From `backend/` with the venv active:
+  - `pytest` (backtests API test is skipped if Backtrader is not installed).
+  - Run the app and call:
+    - `POST http://127.0.0.1:8000/api/backtests` with a payload similar to `test_backtests_api.py` once you have price data for your symbol.
+
+### S04_G02_TF002 – Backtest configuration UI (Run Backtest form)
+
+- Implemented a minimal Backtests UI to configure and trigger runs from the browser.
+- File: `frontend/src/pages/BacktestsPage.tsx`.
+- Run Backtest form (left side of the page):
+  - Strategy selection:
+    - Loads strategies via `GET /api/strategies`.
+    - Uses a MUI `TextField` with `select` to choose a strategy by `code – name`.
+    - If no strategies exist, shows an instructional message guiding the user to create one in the Strategy Library.
+  - Parameter set selection:
+    - When a strategy is selected, loads its parameter sets via `GET /api/strategies/{strategy_id}/params`.
+    - Optional dropdown for `params_id` (“None” allowed).
+  - Core configuration fields:
+    - `Symbol` (uppercased as the user types).
+    - `Timeframe` (1m, 5m, 15m, 1h, 1d – aligned with the Data page).
+    - `Start date`, `End date` (date pickers initialised to today).
+    - `Initial capital` (numeric input, default `100000`).
+    - `Price source label` (select with options such as `prices_db`, `kite`, `yfinance`, `synthetic`, `csv` – purely a tag passed as `price_source`).
+  - Override parameters:
+    - `Override params JSON (optional)` multi-line text area.
+    - If non-empty, the form validates JSON client-side and submits it as `params` in the payload; otherwise `params` is `null`.
+  - Submission behavior:
+    - On submit, posts to `POST /api/backtests` with a body that matches `BacktestCreateRequest`.
+    - Success:
+      - Prepends the created backtest to the in-memory list.
+      - Shows a concise success message summarizing PnL and final value when available.
+    - Error:
+      - Displays the backend `detail` message for 4xx/5xx responses or a generic error message.
+- Deviation note:
+  - The original sprint item described a “Run Backtest” modal inside the Strategy detail view.
+  - For clarity and simplicity at this stage, the configuration form is implemented directly on the `/backtests` page instead of a modal.
+  - The sprint workbook records this as a minor UI placement deviation; a strategy-scoped modal can be added later if needed.
+
+How to verify:
+
+- From `frontend/`:
+  - `npm run dev` and navigate to `/backtests`.
+- Pre-conditions:
+  - At least one `Strategy` (e.g. `SMA_X`) and an optional parameter set created via the Strategy Library.
+  - Relevant price data loaded into `sigmaqlab_prices.db` via the Data page or a CSV.
+- Then:
+  - Use the Backtests page form to submit a backtest and confirm a success banner and a new row in the “Recent Backtests” table.
+
+### S04_G02_TF003 – Backtests list page
+
+- Completed the Backtests page by adding a simple list of recent runs.
+- Still in `frontend/src/pages/BacktestsPage.tsx`:
+  - On initial load, the page calls `GET /api/backtests` and stores the results in `backtests` state.
+  - Renders a MUI `Table` titled “Recent Backtests” with columns:
+    - `ID` – backtest id.
+    - `Strategy` – resolved as `code – name` by matching `strategy_id` with the loaded strategies.
+    - `Symbol(s)` – uses `symbols_json`; shows the primary symbol and `+N` when multiple symbols are present.
+    - `Timeframe`, `Status`.
+    - `PnL` – derived from `metrics.pnl`, formatted with a sign and two decimals when available.
+    - `Final value` – derived from `metrics.final_value` when present.
+    - `Created` – formatted `created_at` timestamp via `toLocaleString`.
+  - When a new backtest is created via the form, it is prepended to this list so the UI reflects the latest run immediately without a separate refresh.
+- This page is intentionally minimal but provides enough visibility to confirm that backtests are being persisted and associated metrics are populated.
+
+Sprint workbook updates for S04/G02:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S04_G02_TB001` – Backtest execution API is marked `implemented` with remarks describing the `/api/backtests` wiring and tests.
+  - `S04_G02_TF002` – Backtest configuration UI is marked `implemented` with a deviation note indicating that the form lives on the Backtests page rather than a Strategy detail modal.
+  - `S04_G02_TF003` – Backtests list page is marked `implemented`, noting the columns and linkage to the API.

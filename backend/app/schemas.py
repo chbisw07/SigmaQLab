@@ -162,3 +162,52 @@ class StrategyParameterRead(StrategyParameterBase):
     params: dict[str, Any] = Field(validation_alias="params_json")
 
     model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
+
+
+# -------------------------
+# Backtest service schemas
+# -------------------------
+
+
+class BacktestCreateRequest(BaseModel):
+    """Request payload for running a backtest via the API."""
+
+    strategy_id: int
+    params_id: int | None = Field(
+        default=None,
+        description="Optional strategy_parameters.id to use as base params",
+    )
+    symbol: str
+    timeframe: str
+    start_date: date
+    end_date: date
+    initial_capital: float = 100_000.0
+    params: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional inline parameter overrides",
+    )
+    price_source: str | None = Field(
+        default=None,
+        description="Label for data source used (e.g. kite, yfinance, synthetic)",
+    )
+
+
+class BacktestRead(BaseModel):
+    """Backtest record representation returned by the API."""
+
+    id: int
+    strategy_id: int
+    params_id: int | None
+    engine: str
+    symbols_json: list[str]
+    timeframe: str
+    start_date: datetime
+    end_date: datetime
+    initial_capital: float
+    status: str
+    metrics: dict[str, Any] = Field(validation_alias="metrics_json")
+    data_source: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
