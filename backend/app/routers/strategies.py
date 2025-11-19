@@ -46,6 +46,7 @@ async def create_strategy(
     strategy = Strategy(
         name=payload.name,
         code=payload.code,
+        engine_code=payload.engine_code,
         category=payload.category,
         description=payload.description,
         status=payload.status,

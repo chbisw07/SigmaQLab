@@ -79,6 +79,13 @@ class StrategyBase(BaseModel):
 
     name: str = Field(..., description="Human-friendly strategy name")
     code: str = Field(..., description="Short identifier used in code/backtests")
+    engine_code: str | None = Field(
+        default=None,
+        description=(
+            "Engine implementation key, e.g. 'SmaCrossStrategy'. "
+            "Multiple strategies can share the same engine_code."
+        ),
+    )
     category: str | None = Field(
         default=None,
         description="Category: trend, mean_reversion, breakout, overlay, risk_filter",
@@ -108,6 +115,7 @@ class StrategyUpdate(BaseModel):
 
     name: str | None = None
     code: str | None = None
+    engine_code: str | None = None
     category: str | None = None
     description: str | None = None
     status: str | None = None

@@ -46,6 +46,8 @@ class BacktestService:
             msg = f"Strategy {strategy_id} not found"
             raise ValueError(msg)
 
+        engine_code = strategy.engine_code or strategy.code
+
         resolved_params: Dict[str, Any] = {}
         if params_id is not None:
             param = meta_db.get(StrategyParameter, params_id)
@@ -84,7 +86,7 @@ class BacktestService:
         )
 
         cfg = BacktestConfig(
-            strategy_code=strategy.code,
+            strategy_code=engine_code,
             symbol=symbol,
             timeframe=timeframe,
             initial_capital=initial_capital,

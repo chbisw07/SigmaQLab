@@ -12,6 +12,9 @@ class Strategy(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     code = Column(String, nullable=False, unique=True, index=True)
+    # Optional engine implementation key, e.g. 'SmaCrossStrategy'. Multiple
+    # business-level strategy codes can share the same engine_code.
+    engine_code = Column(String, nullable=True)
     category = Column(String, nullable=True)
     description = Column(Text, nullable=True)
     status = Column(String, nullable=True)

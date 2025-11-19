@@ -77,10 +77,11 @@ else:  # pragma: no cover - used only when backtrader missing
 
 
 STRATEGY_REGISTRY: Dict[str, type] = {
-    # Primary production code used by real strategies.
+    # Canonical engine implementation key.
+    "SmaCrossStrategy": SmaCrossStrategy,
+    # Backwards-compatible aliases so existing business codes and tests
+    # continue to work even before engine_code is populated everywhere.
     "SMA_X": SmaCrossStrategy,
-    # Test-only aliases so that engine/service/API tests can register
-    # distinct Strategy codes without colliding with user-created rows.
     "SMA_X_SERVICE": SmaCrossStrategy,
     "SMA_X_API": SmaCrossStrategy,
 }

@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from .config import Settings, get_settings
-from .database import Base, engine, get_db
+from .database import Base, SessionLocal, engine, ensure_meta_schema_migrations, get_db
 from .logging_config import configure_logging
 from .prices_database import PricesBase, ensure_schema_migrations, prices_engine
 from .routers import backtests as backtests_router
 from .routers import data as data_router
 from .routers import strategies as strategies_router
+from .seed import seed_preset_strategies
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -21,7 +22,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # simple create_all; migrations via Alembic can be introduced later.
     Base.metadata.create_all(bind=engine)
     PricesBase.metadata.create_all(bind=prices_engine)
+    ensure_meta_schema_migrations()
     ensure_schema_migrations()
+
+    # Seed preset strategies and parameter sets in the meta DB.
+    with SessionLocal() as session:
+        seed_preset_strategies(session)
 
     app = FastAPI(title=_settings.app_name)
 

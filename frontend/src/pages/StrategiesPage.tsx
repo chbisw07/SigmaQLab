@@ -12,7 +12,8 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography
+  Typography,
+  MenuItem
 } from "@mui/material";
 import { useEffect, useState, FormEvent } from "react";
 
@@ -20,6 +21,7 @@ type Strategy = {
   id: number;
   name: string;
   code: string;
+  engine_code: string | null;
   category: string | null;
   description: string | null;
   status: string | null;
@@ -67,6 +69,8 @@ export const StrategiesPage = () => {
   const [editCategory, setEditCategory] = useState("");
   const [isEditingStrategy, setIsEditingStrategy] = useState(false);
 
+  const [engineFilter, setEngineFilter] = useState<string>("all");
+
   const [paramState, setParamState] = useState<FetchState>("idle");
   const [paramMessage, setParamMessage] = useState<string | null>(null);
   const [newParamLabel, setNewParamLabel] = useState("");
@@ -91,6 +95,14 @@ export const StrategiesPage = () => {
     };
     loadStrategies();
   }, [selectedStrategyId]);
+
+  const availableEngineCodes = Array.from(
+    new Set(
+      strategies
+        .map((s) => s.engine_code)
+        .filter((code): code is string => Boolean(code))
+    )
+  );
 
   useEffect(() => {
     const loadParams = async () => {
@@ -141,7 +153,10 @@ export const StrategiesPage = () => {
         tags: null,
         linked_sigma_trader_id: null,
         linked_tradingview_template: null,
-        live_ready: false
+        live_ready: false,
+        // For now we only have one concrete engine implementation wired up.
+        // As more engines are added, this can become a user-selectable field.
+        engine_code: "SmaCrossStrategy"
       };
 
       const res = await fetch(`${API_BASE}/api/strategies`, {
@@ -387,6 +402,25 @@ export const StrategiesPage = () => {
               <Typography variant="h6" gutterBottom>
                 Strategies
               </Typography>
+              {availableEngineCodes.length > 0 && (
+                <Box sx={{ mb: 1 }}>
+                  <TextField
+                    select
+                    size="small"
+                    label="Engine filter"
+                    value={engineFilter}
+                    onChange={(e) => setEngineFilter(e.target.value)}
+                    sx={{ minWidth: 200 }}
+                  >
+                    <MenuItem value="all">All engines</MenuItem>
+                    {availableEngineCodes.map((code) => (
+                      <MenuItem key={code} value={code}>
+                        {code}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Box>
+              )}
               {strategies.length === 0 ? (
                 <Typography variant="body2" color="textSecondary">
                   No strategies yet. Use the form below to add one.
@@ -397,12 +431,19 @@ export const StrategiesPage = () => {
                     <TableRow>
                       <TableCell>Name</TableCell>
                       <TableCell>Code</TableCell>
+                      <TableCell>Engine</TableCell>
                       <TableCell>Status</TableCell>
                       <TableCell>Category</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {strategies.map((s) => (
+                    {strategies
+                      .filter(
+                        (s) =>
+                          engineFilter === "all" ||
+                          (s.engine_code ?? "") === engineFilter
+                      )
+                      .map((s) => (
                       <TableRow
                         key={s.id}
                         hover
@@ -412,6 +453,7 @@ export const StrategiesPage = () => {
                       >
                         <TableCell>{s.name}</TableCell>
                         <TableCell>{s.code}</TableCell>
+                        <TableCell>{s.engine_code ?? ""}</TableCell>
                         <TableCell>{s.status ?? ""}</TableCell>
                         <TableCell>{s.category ?? ""}</TableCell>
                       </TableRow>
@@ -502,6 +544,15 @@ export const StrategiesPage = () => {
                           ({selectedStrategy.code})
                         </Typography>
                       </Typography>
+                      {selectedStrategy.engine_code && (
+                        <Typography
+                          variant="body2"
+                          color="textSecondary"
+                          sx={{ mt: 0.5 }}
+                        >
+                          Engine: {selectedStrategy.engine_code}
+                        </Typography>
+                      )}
                     </Box>
                     <Box>
                       <Button
