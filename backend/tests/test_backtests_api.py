@@ -97,6 +97,8 @@ def test_create_backtest_via_api() -> None:
     assert backtest["status"] == "completed"
     assert "metrics" in backtest
     assert "final_value" in backtest["metrics"]
+    assert "total_return" in backtest["metrics"]
+    assert "max_drawdown" in backtest["metrics"]
 
     # Ensure it appears in list endpoint.
     list_resp = client.get("/api/backtests")

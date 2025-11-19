@@ -30,6 +30,7 @@ type DataSummaryItem = {
   symbol: string;
   exchange?: string | null;
   timeframe: string;
+  source?: string | null;
   start_timestamp: string;
   end_timestamp: string;
   bar_count: number;
@@ -63,6 +64,9 @@ export const DataPage = () => {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [selectedTimeframe, setSelectedTimeframe] = useState<string | null>(null);
   const [preview, setPreview] = useState<PriceBarPreview[]>([]);
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [deleteState, setDeleteState] = useState<FetchState>("idle");
+  const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const today = new Date();
@@ -145,6 +149,109 @@ export const DataPage = () => {
       setPreview(data);
     } catch {
       // ignore for now; UI just won't show preview
+    }
+  };
+
+  const handleToggleRowSelection = (row: DataSummaryItem) => {
+    const key = `${row.symbol}|${row.exchange ?? ""}|${row.timeframe}|${
+      row.source ?? ""
+    }`;
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedRows.size === 0) {
+      setDeleteState("error");
+      setDeleteMessage("Select at least one coverage row to delete.");
+      return;
+    }
+
+    const rowsToDelete = summary.filter((row) => {
+      const key = `${row.symbol}|${row.exchange ?? ""}|${row.timeframe}|${
+        row.source ?? ""
+      }`;
+      return selectedRows.has(key);
+    });
+
+    if (rowsToDelete.length === 0) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete price data for ${rowsToDelete.length} coverage row(s)? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    setDeleteState("loading");
+    setDeleteMessage(null);
+
+    try {
+      const groups = new Map<
+        string,
+        { symbols: string[]; timeframe: string; exchange?: string | null; source?: string | null }
+      >();
+
+      for (const row of rowsToDelete) {
+        const key = `${row.timeframe}|${row.exchange ?? ""}|${row.source ?? ""}`;
+        const existing = groups.get(key);
+        if (existing) {
+          existing.symbols.push(row.symbol);
+        } else {
+          groups.set(key, {
+            symbols: [row.symbol],
+            timeframe: row.timeframe,
+            exchange: row.exchange ?? undefined,
+            source: row.source ?? undefined
+          });
+        }
+      }
+
+      for (const group of groups.values()) {
+        const params = new URLSearchParams();
+        group.symbols.forEach((s) => params.append("symbols", s));
+        params.append("timeframe", group.timeframe);
+        if (group.exchange) {
+          params.append("exchange", group.exchange);
+        }
+        if (group.source) {
+          params.append("source", group.source);
+        }
+
+        const res = await fetch(`${API_BASE}/api/data/bars?${params.toString()}`, {
+          method: "DELETE"
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setDeleteState("error");
+          setDeleteMessage(err.detail ?? "Failed to delete selected data");
+          return;
+        }
+      }
+
+      const summaryRes = await fetch(`${API_BASE}/api/data/summary`);
+      if (summaryRes.ok) {
+        const data: DataSummaryItem[] = await summaryRes.json();
+        setSummary(data);
+      }
+      setSelectedRows(new Set());
+      setDeleteState("success");
+      setDeleteMessage("Selected coverage rows deleted.");
+    } catch (error) {
+      setDeleteState("error");
+      setDeleteMessage(
+        error instanceof Error ? error.message : "Unexpected error during delete"
+      );
     }
   };
 
@@ -257,9 +364,25 @@ export const DataPage = () => {
         <Grid item xs={12} md={7}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Coverage Summary
-              </Typography>
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  mb: 1
+                }}
+              >
+                <Typography variant="h6">Coverage Summary</Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  onClick={handleDeleteSelected}
+                  disabled={selectedRows.size === 0 || deleteState === "loading"}
+                >
+                  Delete Selected
+                </Button>
+              </Box>
               {summary.length === 0 ? (
                 <Typography variant="body2" color="textSecondary">
                   No data yet. Fetch some bars to see coverage.
@@ -268,9 +391,11 @@ export const DataPage = () => {
                 <Table size="small">
                     <TableHead>
                       <TableRow>
+                      <TableCell />
                       <TableCell>Symbol</TableCell>
                       <TableCell>Exchange</TableCell>
                       <TableCell>Timeframe</TableCell>
+                      <TableCell>Source</TableCell>
                       <TableCell>Start</TableCell>
                       <TableCell>End</TableCell>
                       <TableCell align="right">Bars</TableCell>
@@ -279,14 +404,31 @@ export const DataPage = () => {
                   <TableBody>
                     {summary.map((row) => (
                       <TableRow
-                        key={`${row.symbol}-${row.timeframe}`}
+                        key={`${row.symbol}-${row.exchange ?? ""}-${row.timeframe}-${
+                          row.source ?? ""
+                        }`}
                         hover
                         onClick={() => handleSelectSummaryRow(row)}
                         sx={{ cursor: "pointer" }}
                       >
+                        <TableCell padding="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={selectedRows.has(
+                              `${row.symbol}|${row.exchange ?? ""}|${
+                                row.timeframe
+                              }|${row.source ?? ""}`
+                            )}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleToggleRowSelection(row);
+                            }}
+                          />
+                        </TableCell>
                         <TableCell>{row.symbol}</TableCell>
                         <TableCell>{row.exchange ?? ""}</TableCell>
                         <TableCell>{row.timeframe}</TableCell>
+                        <TableCell>{row.source ?? ""}</TableCell>
                         <TableCell>
                           {new Date(row.start_timestamp).toLocaleString()}
                         </TableCell>
@@ -298,6 +440,15 @@ export const DataPage = () => {
                     ))}
                   </TableBody>
                 </Table>
+              )}
+              {deleteMessage && (
+                <Typography
+                  variant="body2"
+                  color={deleteState === "error" ? "error" : "textSecondary"}
+                  mt={1}
+                >
+                  {deleteMessage}
+                </Typography>
               )}
             </CardContent>
           </Card>

@@ -80,3 +80,35 @@ class Backtest(Base):
 
     strategy = relationship("Strategy", back_populates="backtests")
     parameters = relationship("StrategyParameter", back_populates="backtests")
+
+
+class BacktestEquityPoint(Base):
+    __tablename__ = "backtest_equity_points"
+
+    id = Column(Integer, primary_key=True, index=True)
+    backtest_id = Column(
+        Integer, ForeignKey("backtests.id"), nullable=False, index=True
+    )
+    timestamp = Column(DateTime, nullable=False)
+    equity = Column(Float, nullable=False)
+
+    backtest = relationship("Backtest", backref="equity_points")
+
+
+class BacktestTrade(Base):
+    __tablename__ = "backtest_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    backtest_id = Column(
+        Integer, ForeignKey("backtests.id"), nullable=False, index=True
+    )
+    symbol = Column(String, nullable=False)
+    side = Column(String, nullable=False)  # 'long' or 'short'
+    size = Column(Float, nullable=False)
+    entry_timestamp = Column(DateTime, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_timestamp = Column(DateTime, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    pnl = Column(Float, nullable=False)
+
+    backtest = relationship("Backtest", backref="trades")

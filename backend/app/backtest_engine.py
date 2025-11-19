@@ -32,6 +32,20 @@ class EquityPoint:
 
 
 @dataclass
+class TradeRecord:
+    """Single closed trade."""
+
+    symbol: str
+    side: str  # 'long' or 'short'
+    size: float
+    entry_timestamp: datetime
+    entry_price: float
+    exit_timestamp: datetime
+    exit_price: float
+    pnl: float
+
+
+@dataclass
 class BacktestResult:
     """Result of a backtest run."""
 
@@ -39,6 +53,7 @@ class BacktestResult:
     symbol: str
     timeframe: str
     equity_curve: List[EquityPoint]
+    trades: List[TradeRecord]
     metrics: Dict[str, float]
 
 
@@ -54,6 +69,9 @@ if bt is not None:
             sma_slow = bt.ind.SMA(self.data.close, period=self.p.slow)
             self.crossover = bt.ind.CrossOver(sma_fast, sma_slow)
             self._equity_curve: List[EquityPoint] = []
+            # Use a distinct attribute name to avoid clashing with Backtrader's
+            # own internal _trades structure.
+            self._sigma_trades: List[TradeRecord] = []
 
         def next(self) -> None:  # type: ignore[override]
             # Record equity on every bar.
@@ -67,6 +85,39 @@ if bt is not None:
                     self.buy()
             elif self.crossover < 0:
                 self.sell()
+
+        def notify_trade(self, trade: "bt.Trade") -> None:  # type: ignore[override]
+            if not trade.isclosed:
+                return
+
+            size = float(trade.size or 0.0)
+            if size == 0:
+                return
+
+            side = "long" if size > 0 else "short"
+
+            # Entry datetime and price are stored in trade.history.
+            try:
+                entry_status = trade.history[0].status  # type: ignore[index]
+                entry_dt = trade.data.datetime.datetime(entry_status.dt)  # type: ignore[arg-type]
+                entry_price = float(entry_status.price)
+            except Exception:  # pragma: no cover - defensive
+                entry_dt = trade.data.datetime.datetime(0)
+                entry_price = float(trade.price)
+
+            exit_dt = trade.data.datetime.datetime(0)
+
+            record = TradeRecord(
+                symbol=self.data._name or "",  # type: ignore[attr-defined]
+                side=side,
+                size=abs(size),
+                entry_timestamp=entry_dt,
+                entry_price=entry_price,
+                exit_timestamp=exit_dt,
+                exit_price=float(trade.price),
+                pnl=float(trade.pnlcomm),
+            )
+            self._sigma_trades.append(record)
 
 else:  # pragma: no cover - used only when backtrader missing
 
@@ -129,11 +180,12 @@ class BacktraderEngine:
 
         cerebro.run()
 
-        # Our strategy records equity in `._equity_curve` on each bar.
+        # Our strategy records equity in `._equity_curve` and closed trades.
         strat: SmaCrossStrategy = cerebro.runstrats[0][0]  # type: ignore[attr-defined]
 
         final_value = cerebro.broker.getvalue()
         equity_curve = strat._equity_curve
+        trades = strat._sigma_trades
 
         metrics = {
             "final_value": float(final_value),
@@ -146,5 +198,6 @@ class BacktraderEngine:
             symbol=config.symbol,
             timeframe=config.timeframe,
             equity_curve=equity_curve,
+            trades=trades,
             metrics=metrics,
         )

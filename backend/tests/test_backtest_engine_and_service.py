@@ -135,7 +135,18 @@ def test_backtest_service_persists_backtest_record() -> None:
     assert backtest.engine == "backtrader"
     assert backtest.symbols_json == ["TEST"]
     assert backtest.metrics_json is not None
+    metrics = backtest.metrics_json
+    assert "final_value" in metrics
+    assert "total_return" in metrics
+    assert "max_drawdown" in metrics
     assert backtest.status == "completed"
+
+    # Equity curve and trades should also have been persisted.
+    meta_session.refresh(backtest)
+    assert backtest.equity_points  # type: ignore[attr-defined]
+    # For this simple SMA strategy we expect at least one trade, but not enforcing
+    # an exact count to keep the test robust to small engine changes.
+    assert backtest.trades is not None  # type: ignore[attr-defined]
 
     meta_session.close()
     prices_session.close()

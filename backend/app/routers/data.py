@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -67,15 +67,22 @@ async def get_data_summary(
             PriceBar.symbol,
             PriceBar.exchange,
             PriceBar.timeframe,
+            PriceBar.source,
             func.min(PriceBar.timestamp),
             func.max(PriceBar.timestamp),
             func.count(PriceBar.id),
         )
-        .group_by(PriceBar.symbol, PriceBar.exchange, PriceBar.timeframe)
+        .group_by(
+            PriceBar.symbol,
+            PriceBar.exchange,
+            PriceBar.timeframe,
+            PriceBar.source,
+        )
         .order_by(
             PriceBar.symbol.asc(),
             PriceBar.exchange.asc(),
             PriceBar.timeframe.asc(),
+            PriceBar.source.asc(),
         )
         .all()
     )
@@ -85,12 +92,67 @@ async def get_data_summary(
             symbol=symbol,
             exchange=exchange,
             timeframe=timeframe,
+            source=source,
             start_timestamp=start_ts,
             end_timestamp=end_ts,
             bar_count=bar_count,
         )
-        for symbol, exchange, timeframe, start_ts, end_ts, bar_count in rows
+        for symbol, exchange, timeframe, source, start_ts, end_ts, bar_count in rows
     ]
+
+
+@router.delete("/bars", status_code=204)
+async def delete_data_coverage(
+    symbols: list[str] = Query(
+        ..., description="One or more symbols whose data should be deleted"
+    ),
+    timeframe: str = Query(..., description="Timeframe to delete, e.g. 5m, 1h, 1d"),
+    exchange: str | None = Query(
+        None,
+        description=(
+            "Optional exchange filter; when omitted, all exchanges "
+            "for the symbol are affected"
+        ),
+    ),
+    source: str | None = Query(
+        None,
+        description=(
+            "Optional source filter; when omitted, all sources for the "
+            "symbol are affected"
+        ),
+    ),
+    start: datetime | None = Query(
+        None,
+        description="Optional start timestamp; when omitted, deletes from earliest",
+    ),
+    end: datetime | None = Query(
+        None,
+        description="Optional end timestamp; when omitted, deletes up to latest",
+    ),
+    db: Session = Depends(get_prices_db),
+) -> None:
+    """Delete price bars for one or more symbols and a given timeframe.
+
+    The deletion can optionally be narrowed by exchange, source, and a
+    timestamp window. This is primarily used by the UI to clear data for
+    selected coverage rows.
+    """
+
+    if not symbols:
+        raise HTTPException(status_code=400, detail="At least one symbol is required")
+
+    conditions = [PriceBar.symbol.in_(symbols), PriceBar.timeframe == timeframe]
+    if exchange is not None:
+        conditions.append(PriceBar.exchange == exchange)
+    if source is not None:
+        conditions.append(PriceBar.source == source)
+    if start is not None:
+        conditions.append(PriceBar.timestamp >= start)
+    if end is not None:
+        conditions.append(PriceBar.timestamp <= end)
+
+    db.query(PriceBar).filter(and_(*conditions)).delete(synchronize_session=False)
+    db.commit()
 
 
 @router.get(

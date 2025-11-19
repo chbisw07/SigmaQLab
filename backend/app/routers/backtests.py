@@ -6,9 +6,14 @@ from sqlalchemy.orm import Session
 
 from ..backtest_service import BacktestService
 from ..database import get_db
-from ..models import Backtest
+from ..models import Backtest, BacktestEquityPoint, BacktestTrade
 from ..prices_database import get_prices_db
-from ..schemas import BacktestCreateRequest, BacktestRead
+from ..schemas import (
+    BacktestCreateRequest,
+    BacktestEquityPointRead,
+    BacktestRead,
+    BacktestTradeRead,
+)
 
 router = APIRouter(prefix="/api/backtests", tags=["Backtests"])
 
@@ -70,3 +75,35 @@ async def get_backtest(
 ) -> BacktestRead:
     backtest = _get_backtest_or_404(meta_db, backtest_id)
     return BacktestRead.model_validate(backtest)
+
+
+@router.get("/{backtest_id}/equity", response_model=List[BacktestEquityPointRead])
+async def get_backtest_equity(
+    backtest_id: int,
+    meta_db: Session = Depends(get_db),
+) -> List[BacktestEquityPointRead]:
+    _ = _get_backtest_or_404(meta_db, backtest_id)
+    points = (
+        meta_db.query(BacktestEquityPoint)
+        .filter(BacktestEquityPoint.backtest_id == backtest_id)
+        .order_by(BacktestEquityPoint.timestamp.asc())
+        .all()
+    )
+    return [
+        BacktestEquityPointRead(timestamp=p.timestamp, equity=p.equity) for p in points
+    ]
+
+
+@router.get("/{backtest_id}/trades", response_model=List[BacktestTradeRead])
+async def get_backtest_trades(
+    backtest_id: int,
+    meta_db: Session = Depends(get_db),
+) -> List[BacktestTradeRead]:
+    _ = _get_backtest_or_404(meta_db, backtest_id)
+    trades = (
+        meta_db.query(BacktestTrade)
+        .filter(BacktestTrade.backtest_id == backtest_id)
+        .order_by(BacktestTrade.id.asc())
+        .all()
+    )
+    return [BacktestTradeRead.model_validate(t) for t in trades]

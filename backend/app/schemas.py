@@ -52,6 +52,7 @@ class DataSummaryItem(BaseModel):
     symbol: str
     exchange: str | None = None
     timeframe: str
+    source: str | None = None
     start_timestamp: datetime
     end_timestamp: datetime
     bar_count: int
@@ -219,3 +220,26 @@ class BacktestRead(BaseModel):
     finished_at: datetime | None = None
 
     model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class BacktestEquityPointRead(BaseModel):
+    """Single equity point associated with a backtest."""
+
+    timestamp: datetime
+    equity: float
+
+
+class BacktestTradeRead(BaseModel):
+    """Single trade associated with a backtest."""
+
+    id: int
+    symbol: str
+    side: str
+    size: float
+    entry_timestamp: datetime
+    entry_price: float
+    exit_timestamp: datetime
+    exit_price: float
+    pnl: float
+
+    model_config = SettingsConfigDict(from_attributes=True)

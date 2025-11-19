@@ -1026,3 +1026,165 @@ Sprint workbook updates for S04/G02:
   - `S04_G02_TB001` – Backtest execution API is marked `implemented` with remarks describing the `/api/backtests` wiring and tests.
   - `S04_G02_TF002` – Backtest configuration UI is marked `implemented` with a deviation note indicating that the form lives on the Backtests page rather than a Strategy detail modal.
   - `S04_G02_TF003` – Backtests list page is marked `implemented`, noting the columns and linkage to the API.
+
+---
+
+## Sprint S05 – Backtest Results: Persistence & Metrics (G01)
+
+**Group:** G01 – Backtest results: persistence and metrics calculation
+**Tasks:** S05_G01_TB001–TB003
+**Status (Codex):** implemented
+
+### S05_G01_TB001 – Persist equity curve and trades
+
+- Extended the meta DB schema to capture detailed backtest results beyond the summary row:
+  - New models in `backend/app/models.py`:
+    - `BacktestEquityPoint`:
+      - Fields: `id`, `backtest_id` (FK → `backtests.id`), `timestamp`, `equity`.
+      - Represents a single point on the equity curve for a given backtest.
+    - `BacktestTrade`:
+      - Fields: `id`, `backtest_id`, `symbol`, `side` (`long`/`short`), `size`, `entry_timestamp`, `entry_price`, `exit_timestamp`, `exit_price`, `pnl`.
+      - Represents a single closed trade for that backtest.
+  - Relationships:
+    - `Backtest` now has backrefs `equity_points` and `trades` to navigate to these child records.
+- Backtest engine:
+  - `backend/app/backtest_engine.py`:
+    - Added `TradeRecord` dataclass alongside `EquityPoint`.
+    - Extended `BacktestResult` to include:
+      - `equity_curve: list[EquityPoint]`
+      - `trades: list[TradeRecord]`
+    - `SmaCrossStrategy` (Backtrader):
+      - Still records equity on each bar into `self._equity_curve`.
+      - Implements `notify_trade` to capture closed trades:
+        - Determines side (`long`/`short`) from trade size.
+        - Extracts entry timestamp/price from `trade.history` (with a defensive fallback).
+        - Uses the current bar’s datetime as exit timestamp.
+        - Stores `pnl` from `trade.pnlcomm`.
+      - Accumulates trades into `self._trades`, which are fed into `BacktestResult`.
+
+### S05_G01_TB002 – Metrics calculation
+
+- `BacktestService` now derives richer metrics from the engine result:
+  - File: `backend/app/backtest_service.py`.
+  - After `BacktraderEngine.run(...)`:
+    - Starts from the engine’s basic metrics (`final_value`, `initial_capital`, `pnl`).
+    - From the equity curve:
+      - `total_return`:
+        - `(final_equity / start_equity) - 1.0` when `start_equity > 0`.
+      - `max_drawdown`:
+        - Iterates over equity values, tracking the running peak and the largest peak-to-trough percentage drop.
+    - From the trades list:
+      - `trade_count` – number of trades.
+      - `avg_win` – average PnL of winning trades (P&L > 0).
+      - `avg_loss` – average PnL of losing trades (P&L < 0).
+      - `win_rate` – `wins / (wins + losses)` (ignoring flat trades).
+  - These metrics are stored in `Backtest.metrics_json` alongside the existing keys, so existing consumers still work while new consumers can read the enriched set.
+- Persistence:
+  - After creating the `Backtest` row, `BacktestService`:
+    - Writes `BacktestEquityPoint` rows from `result.equity_curve`.
+    - Writes `BacktestTrade` rows from `result.trades`.
+    - Commits once after inserting children for efficiency.
+
+### S05_G01_TB003 – API endpoints for results
+
+- Added dedicated endpoints to retrieve backtest results in a structured way:
+  - File: `backend/app/routers/backtests.py`.
+  - Schemas in `backend/app/schemas.py`:
+    - `BacktestEquityPointRead`:
+      - `timestamp`, `equity`.
+    - `BacktestTradeRead`:
+      - `id`, `symbol`, `side`, `size`, `entry_timestamp`, `entry_price`, `exit_timestamp`, `exit_price`, `pnl`.
+  - Endpoints:
+    - `GET /api/backtests/{backtest_id}` (existing):
+      - Still returns `BacktestRead` with enriched `metrics`.
+    - `GET /api/backtests/{backtest_id}/equity`:
+      - Returns a time-ordered list of `BacktestEquityPointRead` for the given backtest.
+      - 404 if the backtest does not exist.
+    - `GET /api/backtests/{backtest_id}/trades`:
+      - Returns a list of `BacktestTradeRead` for the given backtest.
+      - 404 if the backtest does not exist.
+
+### Tests for S05/G01
+
+- Engine & service tests:
+  - `backend/tests/test_backtest_engine_and_service.py`:
+    - `test_backtest_engine_runs_on_synthetic_data`:
+      - Still validates the engine runs and returns an equity curve and basic metrics.
+    - `test_backtest_service_persists_backtest_record`:
+      - Now additionally asserts:
+        - `metrics_json` contains `final_value`, `total_return`, and `max_drawdown`.
+        - `backtest.equity_points` is non-empty.
+        - `backtest.trades` is present (at least one trade expected for the simple SMA strategy).
+- API tests:
+  - `backend/tests/test_backtests_api.py`:
+    - After posting to `/api/backtests`, test now asserts that the returned `metrics` include `total_return` and `max_drawdown` in addition to `final_value`.
+    - Existing checks for engine, status, and list endpoint remain intact.
+
+### Sprint workbook updates for S05/G01
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S05_G01_TB001` – notes the new `backtest_equity_points` and `backtest_trades` tables and how equity curves/trades are persisted.
+  - `S05_G01_TB002` – records the metrics now computed (`total_return`, `max_drawdown`, `trade_count`, `win_rate`, `avg_win`, `avg_loss`) and stored in `metrics_json`.
+  - `S05_G01_TB003` – describes the new `/api/backtests/{id}/equity` and `/api/backtests/{id}/trades` endpoints for fetching detailed backtest results.
+  All three tasks are marked `implemented`.
+
+---
+
+## Sprint S05 – Backtest Detail UI (G02)
+
+**Group:** G02 – Backtest detail UI: equity chart, trades table, and parameters
+**Tasks:** S05_G02_TF001–TF003
+**Status (Codex):** implemented
+
+### S05_G02_TF001 – Backtest detail page with equity curve
+
+- Extended the Backtests page to include a Backtest Details panel instead of creating a separate route, keeping navigation simple while still surfacing rich information.
+- File: `frontend/src/pages/BacktestsPage.tsx`.
+- Behaviour:
+  - The **Recent Backtests** table is now selectable:
+    - Clicking a row sets it as the `selectedBacktest`.
+    - The selected row is highlighted.
+  - Below the main grid, a new **Backtest Details – #ID** card appears when a backtest is selected.
+  - Summary section:
+    - Shows strategy label (`CODE – Name`), symbols, timeframe, status.
+    - Displays key metrics from `metrics`:
+      - `initial_capital`, `final_value`, `pnl`,
+      - `total_return`, `max_drawdown`,
+      - `trade_count`, `win_rate`, `avg_win`, `avg_loss`.
+    - Helpers render numbers and percentages consistently (two decimal places).
+  - Equity curve:
+    - On selection, the UI calls `GET /api/backtests/{id}/equity`.
+    - Renders a Recharts `LineChart` in a `ResponsiveContainer`.
+    - X-axis: timestamps (hidden ticks; full timestamp in tooltip).
+    - Y-axis: equity values.
+    - This gives a quick view of how the portfolio evolved during the run.
+
+### S05_G02_TF002 – Trades table
+
+- In the same Backtest Details card, added a **Trades** table:
+  - On selection, the UI calls `GET /api/backtests/{id}/trades`.
+  - Shows one row per trade with:
+    - `ID`, `Symbol`, `Side`, `Size`,
+    - `Entry` (timestamp), `Entry price`,
+    - `Exit` (timestamp), `Exit price`,
+    - `PnL`.
+  - Values are formatted to two decimals where appropriate.
+  - If there are no trades, a small “No trades recorded for this backtest” message is shown.
+- This table is directly backed by `BacktestTradeRead` from the new backend endpoints, and will naturally grow as more complex strategies produce richer trade streams.
+
+### S05_G02_TF003 – Parameters in detail view
+
+- When a backtest has an associated parameter set (`params_id` not null), the Backtest Details panel shows the parameters used:
+  - The UI calls `GET /api/params/{params_id}` to fetch the `StrategyParameter` detail.
+  - Renders:
+    - A title: `Parameters – {label}`.
+    - A preformatted JSON block showing `params` with indentation.
+  - This allows you to see at a glance which parameter configuration was active for the selected run without switching back to the Strategies page.
+
+Sprint workbook updates for S05/G02:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S05_G02_TF001` – notes that the Backtests page now includes a details panel with summary metrics and an equity curve chart for the selected run.
+  - `S05_G02_TF002` – records the addition of the trades table with entry/exit, side, size, and PnL columns.
+  - `S05_G02_TF003` – states that the Backtest Details panel surfaces the parameter set used (when available), with JSON rendered in a readable form.
+  All three tasks are marked `implemented`.
