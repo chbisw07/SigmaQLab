@@ -733,3 +733,79 @@ Notes:
   - `S02_G02_TF002` (coverage table),
   - `S02_G02_TF003` (price/volume preview chart)
   all have `status = implemented` (via the shared `"implemented"` string, index 135).
+
+---
+
+## Sprint S03 – Strategy Library UI (G02)
+
+**Group:** G02 – Strategy Library UI: list, details, and parameter sets
+**Tasks:** S03_G02_TF001–TF003
+**Status (Codex):** implemented
+
+### S03_G02_TF001 – Strategy list view
+
+- Implemented the Strategy Library UI on the frontend to surface backend strategy metadata, with basic edit/delete actions.
+- File: `frontend/src/pages/StrategiesPage.tsx`.
+- List view:
+  - Uses a MUI `Table` to show all strategies returned by `GET /api/strategies`.
+  - Columns: Name, Code, Status, Category.
+  - Clicking a row selects that strategy and loads its details + parameter sets.
+  - New strategy creation:
+  - A "New Strategy" form beneath the list with fields:
+    - Name, Code, Category (simple text inputs).
+  - On submit:
+    - Sends `POST /api/strategies` with:
+      - `status` defaulted to `"experimental"`,
+      - `live_ready` defaulted to `false`.
+    - If successful:
+      - Appends the created strategy to the list,
+      - Selects it for detail view,
+      - Shows a small success message.
+    - On error (e.g., code conflict), displays the backend `detail` message in the form.
+
+### S03_G02_TF002 – Strategy detail view
+
+- Detail panel:
+  - Right-hand side of `StrategiesPage`, titled "Strategy Details".
+  - Shows:
+    - Name + code,
+    - Chips for `status`, `category`, and `Live-ready` (if true),
+    - Description when present,
+    - Tags as chips when present,
+    - Integration metadata:
+      - SigmaTrader ID,
+      - TradingView template name.
+  - All values are derived from the backend `StrategyRead` response and stay aligned with the meta DB fields defined in S03_G01.
+
+### S03_G02_TF003 – Parameter sets list + creation/edit/delete
+
+- List of parameter sets:
+  - For the selected strategy, the UI calls:
+    - `GET /api/strategies/{strategy_id}/params`.
+  - Renders a MUI `Table` with columns:
+    - Label, Params (truncated JSON), Notes, Created.
+  - The `params` field is a prettified JSON snippet backed by the `params_json` column via the Pydantic `params` alias.
+- New parameter set form:
+  - Located under the parameter table in the Strategy Details panel.
+  - Fields:
+    - `Label`
+    - `Params JSON` – free-form JSON text area, default value `{"fast": 10, "slow": 30}`.
+    - `Notes`.
+  - On submit:
+    - Validates JSON client-side (with `JSON.parse`) and shows an error if parsing fails.
+    - When creating:
+      - Calls `POST /api/strategies/{strategy_id}/params` with `label`, parsed `params`, and `notes`.
+      - Appends the created parameter to the table and shows a success message.
+    - When editing an existing parameter set:
+      - Clicking a row’s “Edit” action loads it into the form and switches the button label to “Save parameter set”.
+      - Calls `PUT /api/params/{id}` and updates the corresponding row on success.
+    - Delete behavior:
+      - Each parameter row has a “Delete” action that confirms and then calls `DELETE /api/params/{id}`, removing it from the table on success.
+
+### Sprint workbook updates for S03/G02
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S03_G02_TF001` (strategy list view),
+  - `S03_G02_TF002` (strategy detail view),
+  - `S03_G02_TF003` (parameter sets UI)
+  now have `status = implemented` and short remarks describing the UI work.
