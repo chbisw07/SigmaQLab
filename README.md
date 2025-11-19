@@ -41,6 +41,16 @@ source .venv/bin/activate
 pytest
 ```
 
+To run optional live data-provider tests (yfinance + Zerodha Kite for HDFCBANK), set:
+
+```bash
+cd backend
+export SIGMAQLAB_RUN_LIVE_DATA_TESTS=1
+pytest tests/test_live_providers_hdfcbank.py -vv
+```
+
+These tests require a valid `.env` with Kite credentials (`SIGMAQLAB_KITE_API_KEY`, `SIGMAQLAB_KITE_ACCESS_TOKEN`, and optionally `SIGMAQLAB_KITE_API_SECRET`) and may be skipped when providers are unavailable.
+
 ### Backend tooling
 
 Install pre-commit hooks once:

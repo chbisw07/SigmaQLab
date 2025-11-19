@@ -36,4 +36,6 @@ Thumbs.db
 
 # Temporary sprint extraction
 docs/qlab_sprint_tmp/
-
+docs/qlab_sprint_tmp2/
+docs/qlab_sprint_tmp*/
+.~lock.*#

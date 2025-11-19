@@ -10,3 +10,6 @@ ruff
 pytest
 httpx
 pre-commit
+pandas
+yfinance
+kiteconnect

@@ -129,4 +129,3 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
     </Box>
   );
 };
-

@@ -65,5 +65,3 @@ class Backtest(Base):
 
     strategy = relationship("Strategy", back_populates="backtests")
     parameters = relationship("StrategyParameter", back_populates="backtests")
-
-

@@ -6,9 +6,11 @@ target-version = ["py311"]
 line-length = 88
 target-version = "py311"
 select = ["E", "F", "I", "B"]
-ignore = []
+ignore = ["B008", "I001"]
 
 [tool.pytest.ini_options]
 pythonpath = ["app"]
 testpaths = ["tests"]
-
+markers = [
+    "integration: marks tests that hit live external services (deselect with '-m \"not integration\"')",
+]

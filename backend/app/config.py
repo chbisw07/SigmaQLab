@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     - SIGMAQLAB_ENVIRONMENT
     - SIGMAQLAB_LOG_LEVEL
     - SIGMAQLAB_META_DB_PATH
+    - SIGMAQLAB_PRICES_DB_PATH
+    - SIGMAQLAB_KITE_API_KEY
+    - SIGMAQLAB_KITE_API_SECRET
+    - SIGMAQLAB_KITE_ACCESS_TOKEN
     """
 
     model_config = SettingsConfigDict(
@@ -26,6 +30,11 @@ class Settings(BaseSettings):
     environment: Literal["dev", "test", "prod"] = "dev"
     log_level: str = "INFO"
     meta_db_path: Path = Path("sigmaqlab_meta.db")
+    prices_db_path: Path = Path("sigmaqlab_prices.db")
+
+    kite_api_key: str | None = None
+    kite_api_secret: str | None = None
+    kite_access_token: str | None = None
 
 
 @lru_cache()
@@ -35,12 +44,25 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def get_database_url(settings: Settings | None = None) -> str:
-    """Build a SQLite database URL from settings."""
+def _build_sqlite_url(path: Path) -> str:
+    """Build a SQLite database URL from a filesystem path."""
 
-    _settings = settings or get_settings()
     # Ensure the path is absolute to avoid surprises when running from different CWDs.
-    db_path = _settings.meta_db_path
+    db_path = path
     if not db_path.is_absolute():
         db_path = Path(os.getcwd()) / db_path
     return f"sqlite:///{db_path}"
+
+
+def get_database_url(settings: Settings | None = None) -> str:
+    """Return SQLite URL for the meta database."""
+
+    _settings = settings or get_settings()
+    return _build_sqlite_url(_settings.meta_db_path)
+
+
+def get_prices_database_url(settings: Settings | None = None) -> str:
+    """Return SQLite URL for the prices database."""
+
+    _settings = settings or get_settings()
+    return _build_sqlite_url(_settings.prices_db_path)

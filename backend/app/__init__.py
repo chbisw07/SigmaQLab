@@ -1,4 +1,3 @@
 """
 SigmaQLab backend package.
 """
-
