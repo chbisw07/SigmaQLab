@@ -1310,3 +1310,72 @@ Sprint workbook updates for S06/G01:
   - `S06_G01_TB003` – describes the new equity/trade risk metrics (volatility, Sharpe, Sortino, annual return, Calmar).
   - `S06_G01_TB004` – documents per-trade what-if metrics (`pnl_pct`, `holding_period_bars`, `max_theoretical_pnl`, `pnl_capture_ratio`).
   All four tasks are now marked `implemented`.
+
+---
+
+## Sprint S06 – Backtest Overhaul: Chart & Series APIs (G02)
+
+**Group:** G02 – Backtest Overhaul: chart and series APIs
+**Tasks:** S06_G02_TB001–TB004
+**Status (Codex):** implemented
+
+### S06_G02_TB001 – `/api/backtests/{id}/chart-data` endpoint
+
+- Added a chart-data endpoint in `backend/app/routers/backtests.py`:
+  - `GET /api/backtests/{id}/chart-data` returns a `BacktestChartDataResponse`.
+  - Schema additions in `backend/app/schemas.py`:
+    - `BacktestChartPriceBar` – OHLCV bar (`timestamp`, `open`, `high`, `low`, `close`, `volume`).
+    - `IndicatorPoint` – `{timestamp, value}` pair for indicator series.
+    - `BacktestChartDataResponse` – aggregates:
+      - `backtest` (`BacktestRead`),
+      - `price_bars: List[BacktestChartPriceBar]`,
+      - `indicators: Dict[str, List[IndicatorPoint]]`,
+      - `equity_curve: List[BacktestEquityPointRead]`,
+      - `projection_curve: List[BacktestEquityPointRead]`,
+      - `trades: List[BacktestTradeRead]`.
+- Implementation:
+  - Loads the `Backtest` and resolves the primary symbol from `symbols_json[0]`.
+  - Queries `PriceBar` rows for `(symbol, timeframe, [start_date, end_date])` and builds `price_bars`.
+  - Computes simple SMA overlays on close prices:
+    - `sma_5` and `sma_20` via a small `_sma` helper, exposed under `"sma_5"` and `"sma_20"` in `indicators`.
+  - Loads equity points from `backtest_equity_points` and trades from `backtest_trades`.
+  - Builds a basic projection curve:
+    - For each price bar timestamp `t`, sums hypothetical PnL for all trades as if they were held from entry through `t`, with:
+      - `direction = +1` for long, `-1` for short,
+      - `projection_equity(t) = initial_capital + sum(direction * (close_t - entry_price) * size)`.
+    - Returns this as `projection_curve` for visual comparison with the realised equity curve.
+
+### S06_G02_TB002 – Enriched `/api/backtests/{id}/trades` response
+
+- `BacktestTradeRead` in `backend/app/schemas.py` was extended to surface per-trade metrics:
+  - `pnl_pct`, `holding_period_bars`, `max_theoretical_pnl`, `max_theoretical_pnl_pct`, `pnl_capture_ratio`.
+- The existing `GET /api/backtests/{id}/trades` endpoint continues to return `List[BacktestTradeRead]` and now includes these fields, which are populated by `BacktestService.run_single_backtest(...)` (see S06_G01_TB004).
+
+### S06_G02_TB003 – Trades CSV export endpoint
+
+- Implemented CSV export for trades in `backend/app/routers/backtests.py`:
+  - `GET /api/backtests/{id}/trades/export`:
+    - Validates that the backtest exists.
+    - Loads all associated `BacktestTrade` rows.
+    - Writes them to an in-memory CSV with headers:
+      - `id, symbol, side, size, entry_timestamp, entry_price, exit_timestamp, exit_price, pnl, pnl_pct, holding_period_bars, max_theoretical_pnl, max_theoretical_pnl_pct, pnl_capture_ratio`.
+    - Returns a `StreamingResponse` with `text/csv` content type and a `Content-Disposition` filename like `backtest_{id}_trades.csv`.
+- The CSV shape matches the trade-table columns planned for the Backtest detail UI.
+
+### S06_G02_TB004 – Metrics exposure via existing backtest detail
+
+- Kept metrics exposure via the existing `BacktestRead` API model:
+  - `GET /api/backtests/{id}` returns `BacktestRead` with:
+    - `metrics` mapped from `metrics_json`, now including the expanded metric set from S06_G01.
+  - `BacktestChartDataResponse.backtest` embeds this same `BacktestRead`, so chart consumers automatically receive:
+    - PnL, total/annual return, max drawdown, volatility, Sharpe, Sortino, Calmar, trade counts and averages, etc.
+- No separate `/metrics` endpoint is needed at this stage; the detail and chart-data endpoints both expose metrics consistently.
+
+Sprint workbook updates for S06/G02:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S06_G02_TB001` – records the `/api/backtests/{id}/chart-data` endpoint and response structure.
+  - `S06_G02_TB002` – notes the enriched `BacktestTradeRead` returned by `/trades`.
+  - `S06_G02_TB003` – records the CSV export endpoint for backtest trades.
+  - `S06_G02_TB004` – states that expanded metrics are exposed via `BacktestRead` and reused in chart-data responses.
+  All four tasks are marked `implemented`.

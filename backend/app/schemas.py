@@ -242,4 +242,40 @@ class BacktestTradeRead(BaseModel):
     exit_price: float
     pnl: float
 
+    # Optional derived metrics populated by the Backtest Overhaul.
+    pnl_pct: float | None = None
+    holding_period_bars: int | None = None
+    max_theoretical_pnl: float | None = None
+    max_theoretical_pnl_pct: float | None = None
+    pnl_capture_ratio: float | None = None
+
     model_config = SettingsConfigDict(from_attributes=True)
+
+
+class BacktestChartPriceBar(BaseModel):
+    """Single OHLCV bar used in backtest chart-data responses."""
+
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float | None
+
+
+class IndicatorPoint(BaseModel):
+    """Single time/value pair for an indicator series."""
+
+    timestamp: datetime
+    value: float
+
+
+class BacktestChartDataResponse(BaseModel):
+    """Aggregated chart data for a backtest."""
+
+    backtest: BacktestRead
+    price_bars: list[BacktestChartPriceBar]
+    indicators: dict[str, list[IndicatorPoint]]
+    equity_curve: list[BacktestEquityPointRead]
+    projection_curve: list[BacktestEquityPointRead]
+    trades: list[BacktestTradeRead]

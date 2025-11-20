@@ -106,5 +106,24 @@ def test_create_backtest_via_api() -> None:
     items = list_resp.json()
     assert any(item["id"] == backtest["id"] for item in items)
 
+    # Chart-data endpoint should return aligned series and trades.
+    chart_resp = client.get(f"/api/backtests/{backtest['id']}/chart-data")
+    assert chart_resp.status_code == 200, chart_resp.text
+    chart = chart_resp.json()
+    assert chart["backtest"]["id"] == backtest["id"]
+    assert chart["price_bars"]
+    assert chart["equity_curve"]
+    # projection_curve is best-effort; it should have same length as price_bars.
+    assert len(chart["projection_curve"]) == len(chart["price_bars"])
+    # Trades array should be present (may be empty for some paths).
+    assert "trades" in chart
+
+    # Trades export endpoint should return CSV.
+    export_resp = client.get(
+        f"/api/backtests/{backtest['id']}/trades/export",
+    )
+    assert export_resp.status_code == 200
+    assert "text/csv" in export_resp.headers.get("content-type", "")
+
     meta_session.close()
     prices_session.close()
