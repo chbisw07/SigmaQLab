@@ -686,27 +686,44 @@ Notes:
 - UI integration:
   - `DataPage.tsx` loads summary on mount via `GET /api/data/summary`.
   - Renders a MUI `Table` with columns:
-    - Symbol, Exchange, Timeframe, Start, End, Bars.
+    - Symbol, Exchange, Timeframe, Source, Start, End, Bars.
   - Each row is clickable; clicking selects the symbol/timeframe and triggers a preview fetch (see TF003).
+  - Added selection ergonomics:
+    - Per-row checkbox selection tracked in React state.
+    - A `Select All` button to quickly select all coverage rows.
+    - A `Delete Selected` button that bulk-deletes the selected coverage entries via the backend API.
 
 ### S02_G02_TF003 – Price & volume preview chart
 
-- Implemented a preview endpoint for recent bars:
+- Implemented and later enhanced a preview endpoint for recent bars:
   - `backend/app/schemas.py`:
     - `PriceBarPreview` with `timestamp`, `open`, `high`, `low`, `close`, `volume`, `source`.
   - `backend/app/routers/data.py`:
     - `GET /api/data/{symbol}/preview?timeframe=...&limit=200`:
       - Filters `PriceBar` on the given symbol and timeframe.
       - Returns up to `limit` most recent bars (default 200), ordered ascending by timestamp.
-- UI integration:
-  - When a row is selected in the summary table, the Data page calls:
+- Initial UI integration (early S02):
+  - When a row is selected in the summary table, the Data page called:
     - `GET /api/data/{symbol}/preview?timeframe={timeframe}`
-  - The preview panel renders:
-    - A `LineChart` (via `recharts`) of closing prices over time.
-    - A `BarChart` of volumes aligned with the price chart.
-  - Charting setup:
-    - `frontend/package.json` dependency: `"recharts": "^2.12.0"`.
-    - The charts are rendered inside a `ResponsiveContainer` for responsive sizing, with tooltips that format timestamps as local datetimes.
+  - The preview panel rendered:
+    - A `LineChart` and `BarChart` (via `recharts`) for price and volume.
+  - This satisfied the initial sprint goal of “simple price & volume preview”.
+
+- Refined UI integration (later iteration):
+  - Replaced Recharts with `lightweight-charts` and moved indicator logic to the frontend:
+    - New reusable component `frontend/src/features/data/components/DataPreviewChart.tsx`.
+    - Central indicator catalogue in `frontend/src/features/data/indicatorCatalog.ts` with categories:
+      - Moving averages, Trend/Bands, Momentum/Oscillators, Volume/Volatility.
+  - The Data page (`frontend/src/pages/DataPage.tsx`) now:
+    - Computes a rich set of indicators (SMA/EMA/WMA/HMA, Bollinger Bands, Donchian Channels, RSI, MACD, Momentum, ROC, CCI, OBV, ATR) in a `useEffect` over preview data.
+    - Exposes grouped indicator toggles in a compact toolbar above the chart.
+    - Allocates a tall, Moneycontrol-style chart area (≈480–640px height, user-adjustable via slider) with:
+      - Main pane: candlesticks + overlay indicators.
+      - Optional volume histogram with up/down colouring (toggleable via a `Volume bars` checkbox).
+      - Optional oscillator pane: stacked below for RSI/MACD-style indicators.
+  - The layout ensures:
+    - The chart is full-width, visually central, and easy to read.
+    - Indicator controls no longer steal vertical space from the chart itself.
 
 ### Tests for S02/G02
 

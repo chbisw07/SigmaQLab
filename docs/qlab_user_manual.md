@@ -91,6 +91,7 @@ This table shows what’s currently stored in `sigmaqlab_prices.db`:
 - **Symbol** – logical symbol you used when fetching (e.g. `HDFCBANK`).
 - **Exchange** – whatever you supplied in the fetch form (`NSE`, `BSE`, etc.).
 - **Timeframe** – `1m`, `5m`, `1h`, `1d`, etc.
+- **Source** – where the data came from (`kite`, `yfinance`, `local_csv`, etc.).
 - **Start** – earliest timestamp we have for this `(symbol, exchange, timeframe)`.
 - **End** – latest timestamp.
 - **Bars** – total number of bars in that coverage window.
@@ -100,26 +101,44 @@ How it’s populated:
 - The frontend calls `GET /api/data/summary` on load and after each fetch.
 - The backend groups `price_bars` by `(symbol, exchange, timeframe)` and computes min/max timestamp and count.
 
+Selection controls:
+
+- Each row has a checkbox on the left; you can select any subset of rows.
+- The header shows:
+  - **Select All** – selects all coverage rows currently shown.
+  - **Delete Selected** – deletes data for all selected rows after a confirmation dialog.
+
 **Click behavior:**
 
 - Clicking on any row triggers a preview request for that symbol/timeframe:
   - Calls `GET /api/data/{symbol}/preview?timeframe=...`.
   - The selection is reflected in the **Preview** panel title.
 
-### 1.3 Preview (Price + Volume)
+### 1.3 Preview (Price, Volume, Indicators)
 
 Bottom card: **Preview [SYMBOL (TIMEFRAME)]**
 
 What you see:
 
-- **Top chart** – line chart of closing prices over time.
-- **Bottom chart** – bar chart of volumes over time.
+- A **candlestick chart** for price, with optional overlay indicators (e.g. SMA, EMA, Bollinger Bands, Donchian Channels).
+- An optional **volume histogram** under the price chart, with green/red colouring for up/down bars.
+- An optional **oscillator pane** for indicators like RSI or MACD.
+
+Indicator controls:
+
+- Just above the chart you can toggle indicator groups:
+  - **Moving averages** – SMA(5), SMA(20), EMA(20), WMA(20), Hull MA(20).
+  - **Trend / bands** – Bollinger(20), Donchian(20).
+  - **Momentum / oscillators** – RSI(14), MACD(12,26,9), Momentum(10), ROC(10), CCI(20).
+  - **Volume / volatility** – OBV, ATR(14), plus a **Volume bars** checkbox.
+- Checking/unchecking these items updates the chart in-place.
+- If you uncheck **Volume bars**, the volume histogram disappears, leaving just price + overlays.
 
 Details:
 
 - The backend returns a limited number of recent bars for preview (not the entire historical range).
 - Each bar includes `timestamp`, `open`, `high`, `low`, `close`, `volume`, and `source`.
-- The charts hide X-axis text for readability but show exact timestamps in the tooltip.
+- The chart uses a tall, Moneycontrol-style layout so you can clearly see price swings and indicator behaviour.
 
 Use this to sanity-check:
 

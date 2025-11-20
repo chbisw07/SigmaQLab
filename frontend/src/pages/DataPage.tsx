@@ -3,8 +3,11 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
+  FormControlLabel,
   Grid,
   MenuItem,
+  Slider,
   Table,
   TableBody,
   TableCell,
@@ -13,18 +16,12 @@ import {
   TextField,
   Typography
 } from "@mui/material";
-import {
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  BarChart,
-  Bar
-} from "recharts";
 import { useEffect, useState, FormEvent } from "react";
+import { DataPreviewChart } from "../features/data/components/DataPreviewChart";
+import {
+  INDICATORS_BY_CATEGORY,
+  IndicatorDefinition
+} from "../features/data/indicatorCatalog";
 
 type DataSummaryItem = {
   symbol: string;
@@ -46,6 +43,26 @@ type PriceBarPreview = {
   source: string;
 };
 
+type PreviewWithIndicators = PriceBarPreview & {
+  sma5?: number;
+  sma20?: number;
+  ema20?: number;
+  wma20?: number;
+  hma20?: number;
+  bb_upper?: number;
+  bb_lower?: number;
+  rsi14?: number;
+  macd?: number;
+  macd_signal?: number;
+  obv?: number;
+  donchian_high?: number;
+  donchian_low?: number;
+  momentum10?: number;
+  roc10?: number;
+  atr14?: number;
+  cci20?: number;
+};
+
 type FetchState = "idle" | "loading" | "success" | "error";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -64,9 +81,28 @@ export const DataPage = () => {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [selectedTimeframe, setSelectedTimeframe] = useState<string | null>(null);
   const [preview, setPreview] = useState<PriceBarPreview[]>([]);
+  const [previewWithIndicators, setPreviewWithIndicators] = useState<
+    PreviewWithIndicators[]
+  >([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [deleteState, setDeleteState] = useState<FetchState>("idle");
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
+
+  const [selectedIndicatorIds, setSelectedIndicatorIds] = useState<
+    Set<string>
+  >(() => {
+    const initial = new Set<string>();
+    Object.values(INDICATORS_BY_CATEGORY).forEach((defs) => {
+      defs.forEach((def) => {
+        if (def.defaultSelected) {
+          initial.add(def.id);
+        }
+      });
+    });
+    return initial;
+  });
+  const [chartHeight, setChartHeight] = useState(480);
+  const [showVolume, setShowVolume] = useState(true);
 
   useEffect(() => {
     const today = new Date();
@@ -74,6 +110,296 @@ export const DataPage = () => {
     setStartDate(iso);
     setEndDate(iso);
   }, []);
+
+  useEffect(() => {
+    const computeIndicators = (data: PriceBarPreview[]): PreviewWithIndicators[] => {
+      if (data.length === 0) return [];
+
+      const closes = data.map((d) => d.close);
+      const highs = data.map((d) => d.high);
+      const lows = data.map((d) => d.low);
+      const volumes = data.map((d) => d.volume ?? 0);
+
+      const smaSeries = (
+        series: number[],
+        period: number
+      ): (number | undefined)[] => {
+        const out: (number | undefined)[] = [];
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 1) {
+          sum += series[i];
+          if (i >= period) {
+            sum -= series[i - period];
+          }
+          if (i >= period - 1) {
+            out.push(sum / period);
+          } else {
+            out.push(undefined);
+          }
+        }
+        return out;
+      };
+
+      const sma = (period: number): (number | undefined)[] =>
+        smaSeries(closes, period);
+
+      const ema = (period: number): (number | undefined)[] => {
+        const out: (number | undefined)[] = [];
+        const k = 2 / (period + 1);
+        let prev: number | undefined;
+        for (let i = 0; i < data.length; i += 1) {
+          const price = closes[i];
+          if (prev === undefined) {
+            prev = price;
+          } else {
+            prev = price * k + prev * (1 - k);
+          }
+          out.push(prev);
+        }
+        return out;
+      };
+
+      const sma5 = sma(5);
+      const sma20 = sma(20);
+      const ema20 = ema(20);
+
+      const wma = (period: number): (number | undefined)[] => {
+        const weights = Array.from({ length: period }, (_, i) => i + 1);
+        const weightSum = weights.reduce((a, b) => a + b, 0);
+        const out: (number | undefined)[] = [];
+        for (let i = 0; i < data.length; i += 1) {
+          if (i < period - 1) {
+            out.push(undefined);
+            continue;
+          }
+          let acc = 0;
+          for (let j = 0; j < period; j += 1) {
+            acc += closes[i - j] * weights[period - 1 - j];
+          }
+          out.push(acc / weightSum);
+        }
+        return out;
+      };
+
+      const wma20 = wma(20);
+
+      const hma20: (number | undefined)[] = [];
+      const half = 10;
+      const sqrtN = Math.round(Math.sqrt(20));
+      const wmaHalf = wma(half);
+      const wmaFull = wma(20);
+      const diff: (number | undefined)[] = [];
+      for (let i = 0; i < data.length; i += 1) {
+        if (wmaHalf[i] === undefined || wmaFull[i] === undefined) {
+          diff.push(undefined);
+        } else {
+          diff.push(2 * (wmaHalf[i] as number) - (wmaFull[i] as number));
+        }
+      }
+      const tempHma = (() => {
+        const out: (number | undefined)[] = [];
+        const weights = Array.from({ length: sqrtN }, (_, i) => i + 1);
+        const weightSum = weights.reduce((a, b) => a + b, 0);
+        for (let i = 0; i < data.length; i += 1) {
+          if (i < sqrtN - 1) {
+            out.push(undefined);
+            continue;
+          }
+          let acc = 0;
+          let valid = true;
+          for (let j = 0; j < sqrtN; j += 1) {
+            const v = diff[i - j];
+            if (v === undefined) {
+              valid = false;
+              break;
+            }
+            acc += v * weights[sqrtN - 1 - j];
+          }
+          out.push(valid ? acc / weightSum : undefined);
+        }
+        return out;
+      })();
+      for (let i = 0; i < data.length; i += 1) {
+        hma20.push(tempHma[i]);
+      }
+
+      const bbUpper: (number | undefined)[] = [];
+      const bbLower: (number | undefined)[] = [];
+      for (let i = 0; i < data.length; i += 1) {
+        if (i < 19) {
+          bbUpper.push(undefined);
+          bbLower.push(undefined);
+          continue;
+        }
+        const window = closes.slice(i - 19, i + 1);
+        const mean = window.reduce((a, b) => a + b, 0) / window.length;
+        const variance =
+          window.reduce((a, b) => a + (b - mean) * (b - mean), 0) /
+          window.length;
+        const std = Math.sqrt(variance);
+        bbUpper.push(mean + 2 * std);
+        bbLower.push(mean - 2 * std);
+      }
+
+      const rsi14: (number | undefined)[] = [];
+      let avgGain: number | undefined;
+      let avgLoss: number | undefined;
+      for (let i = 0; i < data.length; i += 1) {
+        if (i === 0) {
+          rsi14.push(undefined);
+          continue;
+        }
+        const change = closes[i] - closes[i - 1];
+        const gain = change > 0 ? change : 0;
+        const loss = change < 0 ? -change : 0;
+        if (i < 14) {
+          avgGain = (avgGain ?? 0) + gain;
+          avgLoss = (avgLoss ?? 0) + loss;
+          if (i === 13) {
+            avgGain /= 14;
+            avgLoss /= 14;
+          }
+          rsi14.push(undefined);
+        } else {
+          avgGain = ((avgGain ?? 0) * 13 + gain) / 14;
+          avgLoss = ((avgLoss ?? 0) * 13 + loss) / 14;
+          if (!avgLoss || avgLoss === 0) {
+            rsi14.push(100);
+          } else {
+            const rs = avgGain / avgLoss;
+            rsi14.push(100 - 100 / (1 + rs));
+          }
+        }
+      }
+
+      const macd: (number | undefined)[] = [];
+      const macdSignal: (number | undefined)[] = [];
+      const ema12 = ema(12);
+      const ema26 = ema(26);
+      for (let i = 0; i < data.length; i += 1) {
+        if (ema12[i] === undefined || ema26[i] === undefined) {
+          macd.push(undefined);
+        } else {
+          macd.push((ema12[i] as number) - (ema26[i] as number));
+        }
+      }
+      let signalPrev: number | undefined;
+      const k9 = 2 / (9 + 1);
+      for (let i = 0; i < data.length; i += 1) {
+        const m = macd[i];
+        if (m === undefined) {
+          macdSignal.push(undefined);
+        } else if (signalPrev === undefined) {
+          signalPrev = m;
+          macdSignal.push(signalPrev);
+        } else {
+          signalPrev = m * k9 + signalPrev * (1 - k9);
+          macdSignal.push(signalPrev);
+        }
+      }
+
+      const obv: number[] = [];
+      let prevClose = closes[0];
+      let prevObv = 0;
+      obv.push(prevObv);
+      for (let i = 1; i < data.length; i += 1) {
+        const price = closes[i];
+        let value = prevObv;
+        if (price > prevClose) {
+          value += volumes[i];
+        } else if (price < prevClose) {
+          value -= volumes[i];
+        }
+        obv.push(value);
+        prevObv = value;
+        prevClose = price;
+      }
+
+      const atr14: (number | undefined)[] = [];
+      const tr: number[] = [];
+      for (let i = 0; i < data.length; i += 1) {
+        if (i === 0) {
+          tr.push(highs[i] - lows[i]);
+        } else {
+          const high = highs[i];
+          const low = lows[i];
+          const prev = closes[i - 1];
+          const trVal = Math.max(
+            high - low,
+            Math.abs(high - prev),
+            Math.abs(low - prev)
+          );
+          tr.push(trVal);
+        }
+      }
+      let atrPrev: number | undefined;
+      for (let i = 0; i < data.length; i += 1) {
+        if (i < 13) {
+          atr14.push(undefined);
+        } else if (i === 13) {
+          const avg =
+            tr.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
+          atrPrev = avg;
+          atr14.push(avg);
+        } else {
+          atrPrev = ((atrPrev ?? tr[i]) * 13 + tr[i]) / 14;
+          atr14.push(atrPrev);
+        }
+      }
+
+      const cci20: (number | undefined)[] = [];
+      const typicalPrices = data.map(
+        (d) => (d.high + d.low + d.close) / 3
+      );
+      const tpSma20 = smaSeries(typicalPrices, 20);
+      for (let i = 0; i < data.length; i += 1) {
+        if (i < 19 || tpSma20[i] === undefined) {
+          cci20.push(undefined);
+          continue;
+        }
+        const tpWindow = typicalPrices.slice(i - 19, i + 1);
+        const smaTp = tpSma20[i] as number;
+        const meanDev =
+          tpWindow
+            .map((tp) => Math.abs(tp - smaTp))
+            .reduce((a, b) => a + b, 0) / tpWindow.length;
+        if (meanDev === 0) {
+          cci20.push(undefined);
+        } else {
+          cci20.push((typicalPrices[i] - smaTp) / (0.015 * meanDev));
+        }
+      }
+
+      return data.map((d, i) => ({
+        ...d,
+        sma5: sma5[i],
+        sma20: sma20[i],
+        ema20: ema20[i],
+        wma20: wma20[i],
+        hma20: hma20[i],
+        bb_upper: bbUpper[i],
+        bb_lower: bbLower[i],
+        rsi14: rsi14[i],
+        macd: macd[i],
+        macd_signal: macdSignal[i],
+        obv: obv[i],
+        donchian_high:
+          i >= 19 ? Math.max(...data.slice(i - 19, i + 1).map((b) => b.high)) : undefined,
+        donchian_low:
+          i >= 19 ? Math.min(...data.slice(i - 19, i + 1).map((b) => b.low)) : undefined,
+        momentum10:
+          i >= 10 ? closes[i] - closes[i - 10] : undefined,
+        roc10:
+          i >= 10 && closes[i - 10] !== 0
+            ? ((closes[i] / closes[i - 10] - 1) * 100)
+            : undefined,
+        atr14: atr14[i],
+        cci20: cci20[i]
+      }));
+    };
+
+    setPreviewWithIndicators(computeIndicators(preview));
+  }, [preview]);
 
   useEffect(() => {
     const loadSummary = async () => {
@@ -165,6 +491,17 @@ export const DataPage = () => {
       }
       return next;
     });
+  };
+
+  const handleSelectAllRows = () => {
+    const next = new Set<string>();
+    summary.forEach((row) => {
+      const key = `${row.symbol}|${row.exchange ?? ""}|${row.timeframe}|${
+        row.source ?? ""
+      }`;
+      next.add(key);
+    });
+    setSelectedRows(next);
   };
 
   const handleDeleteSelected = async () => {
@@ -283,10 +620,15 @@ export const DataPage = () => {
                   value={timeframe}
                   onChange={(e) => setTimeframe(e.target.value)}
                 >
+                  <MenuItem disabled>Minutes</MenuItem>
                   <MenuItem value="1m">1 minute</MenuItem>
+                  <MenuItem value="3m">3 minutes</MenuItem>
                   <MenuItem value="5m">5 minutes</MenuItem>
                   <MenuItem value="15m">15 minutes</MenuItem>
+                  <MenuItem value="30m">30 minutes</MenuItem>
+                  <MenuItem disabled>Hours</MenuItem>
                   <MenuItem value="1h">1 hour</MenuItem>
+                  <MenuItem disabled>Days</MenuItem>
                   <MenuItem value="1d">1 day</MenuItem>
                 </TextField>
                 <TextField
@@ -373,15 +715,25 @@ export const DataPage = () => {
                 }}
               >
                 <Typography variant="h6">Coverage Summary</Typography>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  color="error"
-                  onClick={handleDeleteSelected}
-                  disabled={selectedRows.size === 0 || deleteState === "loading"}
-                >
-                  Delete Selected
-                </Button>
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={handleSelectAllRows}
+                    disabled={summary.length === 0}
+                  >
+                    Select All
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    onClick={handleDeleteSelected}
+                    disabled={selectedRows.size === 0 || deleteState === "loading"}
+                  >
+                    Delete Selected
+                  </Button>
+                </Box>
               </Box>
               {summary.length === 0 ? (
                 <Typography variant="body2" color="textSecondary">
@@ -470,39 +822,174 @@ export const DataPage = () => {
                 data.
               </Typography>
             ) : (
-              <Box sx={{ height: 320 }}>
-                <ResponsiveContainer width="100%" height="60%">
-                  <LineChart data={preview}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="timestamp" tick={false} />
-                    <YAxis />
-                    <Tooltip
-                      labelFormatter={(value) =>
-                        new Date(value).toLocaleString()
+              <>
+                <Box mb={2}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Indicators
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={3}>
+                      <Typography variant="body2">Moving averages</Typography>
+                      {INDICATORS_BY_CATEGORY.moving_average.map(
+                        (def: IndicatorDefinition) => (
+                          <FormControlLabel
+                            key={def.id}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={selectedIndicatorIds.has(def.id)}
+                                onChange={(e) => {
+                                  setSelectedIndicatorIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) {
+                                      next.add(def.id);
+                                    } else {
+                                      next.delete(def.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              />
+                            }
+                            label={def.label}
+                          />
+                        )
+                      )}
+                    </Grid>
+                    <Grid item xs={12} md={3}>
+                      <Typography variant="body2">Trend / bands</Typography>
+                      {INDICATORS_BY_CATEGORY.trend_bands.map(
+                        (def: IndicatorDefinition) => (
+                          <FormControlLabel
+                            key={def.id}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={selectedIndicatorIds.has(def.id)}
+                                onChange={(e) => {
+                                  setSelectedIndicatorIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) {
+                                      next.add(def.id);
+                                    } else {
+                                      next.delete(def.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              />
+                            }
+                            label={def.label}
+                          />
+                        )
+                      )}
+                    </Grid>
+                    <Grid item xs={12} md={3}>
+                      <Typography variant="body2">
+                        Momentum / oscillators
+                      </Typography>
+                      {INDICATORS_BY_CATEGORY.momentum.map(
+                        (def: IndicatorDefinition) => (
+                          <FormControlLabel
+                            key={def.id}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={selectedIndicatorIds.has(def.id)}
+                                onChange={(e) => {
+                                  setSelectedIndicatorIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) {
+                                      next.add(def.id);
+                                    } else {
+                                      next.delete(def.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              />
+                            }
+                            label={def.label}
+                          />
+                        )
+                      )}
+                    </Grid>
+                    <Grid item xs={12} md={3}>
+                      <Typography variant="body2">Volume / volatility</Typography>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            size="small"
+                            checked={showVolume}
+                            onChange={(e) => setShowVolume(e.target.checked)}
+                          />
+                        }
+                        label="Volume bars"
+                      />
+                      {INDICATORS_BY_CATEGORY.volume.map(
+                        (def: IndicatorDefinition) => (
+                          <FormControlLabel
+                            key={def.id}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={selectedIndicatorIds.has(def.id)}
+                                onChange={(e) => {
+                                  setSelectedIndicatorIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) {
+                                      next.add(def.id);
+                                    } else {
+                                      next.delete(def.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              />
+                            }
+                            label={def.label}
+                          />
+                        )
+                      )}
+                    </Grid>
+                  </Grid>
+                  <Box mt={2} sx={{ maxWidth: 260 }}>
+                    <Typography variant="body2" gutterBottom>
+                      Chart height
+                    </Typography>
+                    <Slider
+                      size="small"
+                      value={chartHeight}
+                      min={420}
+                      max={640}
+                      step={20}
+                      valueLabelDisplay="auto"
+                      onChange={(_, value) =>
+                        setChartHeight(
+                          Array.isArray(value) ? value[0] : (value as number)
+                        )
                       }
                     />
-                    <Line
-                      type="monotone"
-                      dataKey="close"
-                      stroke="#90caf9"
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-                <ResponsiveContainer width="100%" height="40%">
-                  <BarChart data={preview}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="timestamp" tick={false} />
-                    <YAxis />
-                    <Tooltip
-                      labelFormatter={(value) =>
-                        new Date(value).toLocaleString()
-                      }
-                    />
-                    <Bar dataKey="volume" fill="#f48fb1" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </Box>
+                  </Box>
+                </Box>
+
+                <Box
+                  sx={{
+                    mt: 1,
+                    height: chartHeight,
+                    minHeight: chartHeight,
+                    width: "100%",
+                    position: "relative"
+                  }}
+                >
+                  <DataPreviewChart
+                    data={previewWithIndicators}
+                    selectedIndicatorIds={Array.from(selectedIndicatorIds)}
+                    height={chartHeight}
+                    showVolume={showVolume}
+                  />
+                </Box>
+              </>
             )}
           </CardContent>
         </Card>

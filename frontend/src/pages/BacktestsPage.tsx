@@ -381,6 +381,32 @@ export const BacktestsPage = () => {
     return value.toFixed(2);
   };
 
+  const tradesWithCumulative = (() => {
+    let cum = 0;
+    return trades.map((t) => {
+      cum += t.pnl;
+      return { ...t, cum_pnl: cum };
+    });
+  })();
+
+  const tradeExitByTimestamp: Record<string, number> = {};
+  trades.forEach((t) => {
+    tradeExitByTimestamp[t.exit_timestamp] = t.pnl;
+  });
+
+  const equityWithDelta = equity.map((pt, idx) => {
+    const prevEquity = idx === 0 ? pt.equity : equity[idx - 1].equity;
+    const delta = pt.equity - prevEquity;
+    const deltaPct = prevEquity !== 0 ? (delta / prevEquity) * 100 : 0;
+    const tradePnl = tradeExitByTimestamp[pt.timestamp];
+    return {
+      ...pt,
+      delta,
+      deltaPct,
+      tradePnl
+    };
+  });
+
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
@@ -774,7 +800,7 @@ export const BacktestsPage = () => {
 
                 <Grid item xs={12} md={8}>
                   <Typography variant="subtitle2" gutterBottom>
-                    Equity Curve
+                    Equity Curve (net return %)
                   </Typography>
                   {equity.length === 0 ? (
                     <Typography variant="body2" color="textSecondary">
@@ -783,20 +809,64 @@ export const BacktestsPage = () => {
                   ) : (
                     <Box sx={{ height: 260 }}>
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={equity}>
+                        <LineChart
+                          data={equityWithDelta.map((pt) => {
+                            const init =
+                              typeof selectedBacktest.metrics.initial_capital ===
+                                "number" &&
+                              selectedBacktest.metrics.initial_capital > 0
+                                ? selectedBacktest.metrics.initial_capital
+                                : selectedBacktest.initial_capital;
+                            const pct =
+                              init > 0 ? (pt.equity / init - 1) * 100 : 0;
+                            return {
+                              ...pt,
+                              equity_pct: pct
+                            };
+                          })}
+                        >
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="timestamp" tick={false} />
-                          <YAxis />
+                          <YAxis
+                            tickFormatter={(v) =>
+                              `${(v as number).toFixed(2)}%`
+                            }
+                            domain={["auto", "auto"]}
+                          />
                           <Tooltip
                             labelFormatter={(value) =>
                               new Date(value as string).toLocaleString()
                             }
+                            formatter={(value: number) =>
+                              [`${value.toFixed(2)}%`, "Equity"]
+                            }
                           />
                           <Line
                             type="monotone"
-                            dataKey="equity"
+                            dataKey="equity_pct"
                             stroke="#90caf9"
-                            dot={false}
+                            dot={(props) => {
+                              const { cx, cy, payload } = props as {
+                                cx: number;
+                                cy: number;
+                                payload: { tradePnl?: number };
+                              };
+                              const pnl = payload.tradePnl;
+                              if (pnl === undefined) {
+                                return null;
+                              }
+                              const fill = pnl >= 0 ? "#4caf50" : "#ef5350";
+                              return (
+                                <circle
+                                  cx={cx}
+                                  cy={cy}
+                                  r={4}
+                                  fill={fill}
+                                  stroke="#000"
+                                  strokeWidth={1}
+                                />
+                              );
+                            }}
                           />
                         </LineChart>
                       </ResponsiveContainer>
@@ -824,10 +894,11 @@ export const BacktestsPage = () => {
                             <TableCell>Exit</TableCell>
                             <TableCell align="right">Exit price</TableCell>
                             <TableCell align="right">PnL</TableCell>
+                            <TableCell align="right">Cum PnL</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {trades.map((t) => (
+                          {tradesWithCumulative.map((t) => (
                             <TableRow key={t.id}>
                               <TableCell>{t.id}</TableCell>
                               <TableCell>{t.symbol}</TableCell>
@@ -849,6 +920,55 @@ export const BacktestsPage = () => {
                               </TableCell>
                               <TableCell align="right">
                                 {t.pnl.toFixed(2)}
+                              </TableCell>
+                              <TableCell align="right">
+                                {t.cum_pnl.toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </Box>
+
+                  <Box mt={3}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Equity Data (last 50 bars)
+                    </Typography>
+                    {equityWithDelta.length === 0 ? (
+                      <Typography variant="body2" color="textSecondary">
+                        No equity data available.
+                      </Typography>
+                    ) : (
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Time</TableCell>
+                            <TableCell align="right">Equity</TableCell>
+                            <TableCell align="right">Δ Equity</TableCell>
+                            <TableCell align="right">Δ %</TableCell>
+                            <TableCell align="right">Trade PnL</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {equityWithDelta.slice(-50).map((pt) => (
+                            <TableRow key={pt.timestamp}>
+                              <TableCell>
+                                {formatDateTime(pt.timestamp)}
+                              </TableCell>
+                              <TableCell align="right">
+                                {pt.equity.toFixed(2)}
+                              </TableCell>
+                              <TableCell align="right">
+                                {pt.delta.toFixed(2)}
+                              </TableCell>
+                              <TableCell align="right">
+                                {pt.deltaPct.toFixed(2)}%
+                              </TableCell>
+                              <TableCell align="right">
+                                {pt.tradePnl !== undefined
+                                  ? pt.tradePnl.toFixed(2)
+                                  : ""}
                               </TableCell>
                             </TableRow>
                           ))}
