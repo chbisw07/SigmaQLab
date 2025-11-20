@@ -18,6 +18,7 @@ from ..schemas import (
     BacktestRead,
     BacktestTradeRead,
 )
+from ..schemas_backtest_settings import BacktestSettingsUpdate
 
 router = APIRouter(prefix="/api/backtests", tags=["Backtests"])
 
@@ -52,12 +53,45 @@ async def create_backtest(
             params=payload.params,
             params_id=payload.params_id,
             price_source=payload.price_source,
+            label=payload.label,
+            notes=payload.notes,
+            risk_config=payload.risk_config,
+            costs_config=payload.costs_config,
+            visual_config=payload.visual_config,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         # Likely missing backtrader or misconfigured engine.
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BacktestRead.model_validate(backtest)
+
+
+@router.patch("/{backtest_id}/settings", response_model=BacktestRead)
+async def update_backtest_settings(
+    backtest_id: int,
+    payload: BacktestSettingsUpdate,
+    meta_db: Session = Depends(get_db),
+) -> BacktestRead:
+    """Update non-engine backtest settings such as label, notes, and configs."""
+
+    backtest = _get_backtest_or_404(meta_db, backtest_id)
+
+    if payload.label is not None:
+        backtest.label = payload.label
+    if payload.notes is not None:
+        backtest.notes = payload.notes
+    if payload.risk_config is not None:
+        backtest.risk_config_json = payload.risk_config
+    if payload.costs_config is not None:
+        backtest.costs_config_json = payload.costs_config
+    if payload.visual_config is not None:
+        backtest.visual_config_json = payload.visual_config
+
+    meta_db.add(backtest)
+    meta_db.commit()
+    meta_db.refresh(backtest)
 
     return BacktestRead.model_validate(backtest)
 

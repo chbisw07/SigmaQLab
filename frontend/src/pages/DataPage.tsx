@@ -24,6 +24,7 @@ import {
 } from "../features/data/indicatorCatalog";
 
 type DataSummaryItem = {
+  coverage_id: string;
   symbol: string;
   exchange?: string | null;
   timeframe: string;
@@ -498,9 +499,7 @@ export const DataPage = () => {
   };
 
   const handleToggleRowSelection = (row: DataSummaryItem) => {
-    const key = `${row.symbol}|${row.exchange ?? ""}|${row.timeframe}|${
-      row.source ?? ""
-    }`;
+    const key = row.coverage_id;
     setSelectedRows((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
@@ -515,9 +514,7 @@ export const DataPage = () => {
   const handleSelectAllRows = () => {
     const next = new Set<string>();
     summary.forEach((row) => {
-      const key = `${row.symbol}|${row.exchange ?? ""}|${row.timeframe}|${
-        row.source ?? ""
-      }`;
+      const key = row.coverage_id;
       next.add(key);
     });
     setSelectedRows(next);
@@ -530,12 +527,7 @@ export const DataPage = () => {
       return;
     }
 
-    const rowsToDelete = summary.filter((row) => {
-      const key = `${row.symbol}|${row.exchange ?? ""}|${row.timeframe}|${
-        row.source ?? ""
-      }`;
-      return selectedRows.has(key);
-    });
+    const rowsToDelete = summary.filter((row) => selectedRows.has(row.coverage_id));
 
     if (rowsToDelete.length === 0) {
       return;
@@ -760,9 +752,10 @@ export const DataPage = () => {
                 </Typography>
               ) : (
                 <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                      <TableCell />
+                  <TableHead>
+                    <TableRow>
+                      <TableCell padding="checkbox" />
+                      <TableCell>ID</TableCell>
                       <TableCell>Symbol</TableCell>
                       <TableCell>Exchange</TableCell>
                       <TableCell>Timeframe</TableCell>
@@ -773,42 +766,41 @@ export const DataPage = () => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {summary.map((row) => (
-                      <TableRow
-                        key={`${row.symbol}-${row.exchange ?? ""}-${row.timeframe}-${
-                          row.source ?? ""
-                        }`}
-                        hover
-                        onClick={() => handleSelectSummaryRow(row)}
-                        sx={{ cursor: "pointer" }}
-                      >
-                        <TableCell padding="checkbox">
-                          <input
-                            type="checkbox"
-                            checked={selectedRows.has(
-                              `${row.symbol}|${row.exchange ?? ""}|${
-                                row.timeframe
-                              }|${row.source ?? ""}`
-                            )}
-                            onChange={(e) => {
-                              e.stopPropagation();
-                              handleToggleRowSelection(row);
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell>{row.symbol}</TableCell>
-                        <TableCell>{row.exchange ?? ""}</TableCell>
-                        <TableCell>{row.timeframe}</TableCell>
-                        <TableCell>{row.source ?? ""}</TableCell>
-                        <TableCell>
-                          {new Date(row.start_timestamp).toLocaleString()}
-                        </TableCell>
-                        <TableCell>
-                          {new Date(row.end_timestamp).toLocaleString()}
-                        </TableCell>
-                        <TableCell align="right">{row.bar_count}</TableCell>
-                      </TableRow>
-                    ))}
+                    {summary.map((row) => {
+                      const key = row.coverage_id;
+                      const checked = selectedRows.has(key);
+                      return (
+                        <TableRow
+                          key={key}
+                          hover
+                          onClick={() => handleSelectSummaryRow(row)}
+                          sx={{ cursor: "pointer" }}
+                        >
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              size="small"
+                              checked={checked}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                handleToggleRowSelection(row);
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell>{row.coverage_id}</TableCell>
+                          <TableCell>{row.symbol}</TableCell>
+                          <TableCell>{row.exchange ?? ""}</TableCell>
+                          <TableCell>{row.timeframe}</TableCell>
+                          <TableCell>{row.source ?? ""}</TableCell>
+                          <TableCell>
+                            {new Date(row.start_timestamp).toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            {new Date(row.end_timestamp).toLocaleString()}
+                          </TableCell>
+                          <TableCell align="right">{row.bar_count}</TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}

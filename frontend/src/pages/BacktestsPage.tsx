@@ -3,13 +3,21 @@ import {
   Button,
   Card,
   CardContent,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
   Grid,
   MenuItem,
+  Switch,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableRow,
+  Tab,
+  Tabs,
   TextField,
   Typography
 } from "@mui/material";
@@ -35,11 +43,34 @@ type BacktestMetrics = {
   [key: string]: unknown;
 };
 
+type RiskConfig = {
+  maxPositionSizePct?: number | null;
+  perTradeRiskPct?: number | null;
+  allowShortSelling?: boolean | null;
+  stopLossPct?: number | null;
+  takeProfitPct?: number | null;
+};
+
+type CostsConfig = {
+  commissionType?: "flat" | "percent" | null;
+  commissionValue?: number | null;
+  slippagePerShare?: number | null;
+  otherChargesPct?: number | null;
+};
+
+type VisualConfig = {
+  showTradeMarkers?: boolean | null;
+  showProjection?: boolean | null;
+  showVolume?: boolean | null;
+};
+
 type Backtest = {
   id: number;
   strategy_id: number;
   params_id: number | null;
   engine: string;
+  label: string | null;
+  notes: string | null;
   symbols_json: string[];
   timeframe: string;
   start_date: string;
@@ -48,6 +79,9 @@ type Backtest = {
   status: string;
   metrics: BacktestMetrics;
   data_source: string | null;
+  risk_config?: RiskConfig | null;
+  costs_config?: CostsConfig | null;
+  visual_config?: VisualConfig | null;
   created_at: string;
   finished_at: string | null;
 };
@@ -109,6 +143,17 @@ type StrategyParameterDetail = {
 
 type FetchState = "idle" | "loading" | "success" | "error";
 
+type DataSummaryItem = {
+  coverage_id: string;
+  symbol: string;
+  exchange?: string | null;
+  timeframe: string;
+  source?: string | null;
+  start_timestamp: string;
+  end_timestamp: string;
+  bar_count: number;
+};
+
 const API_BASE = "http://127.0.0.1:8000";
 
 export const BacktestsPage = () => {
@@ -116,10 +161,10 @@ export const BacktestsPage = () => {
   const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(
     null
   );
-  const [params, setParams] = useState<StrategyParameter[]>([]);
   const [selectedParamsId, setSelectedParamsId] = useState<number | null>(null);
 
   const [symbol, setSymbol] = useState("TESTBT");
+  const [exchange, setExchange] = useState("NSE");
   const [timeframe, setTimeframe] = useState("1d");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -150,6 +195,27 @@ export const BacktestsPage = () => {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
 
+  const [coverageSummary, setCoverageSummary] = useState<DataSummaryItem[]>([]);
+  const [useExistingCoverage, setUseExistingCoverage] = useState(true);
+  const [selectedCoverageId, setSelectedCoverageId] = useState<string>("");
+
+  const [visualSettings, setVisualSettings] = useState<VisualConfig>({
+    showTradeMarkers: true,
+    showProjection: true,
+    showVolume: true
+  });
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<
+    "inputs" | "risk" | "costs" | "visual" | "meta"
+  >("inputs");
+  const [settingsLabel, setSettingsLabel] = useState("");
+  const [settingsNotes, setSettingsNotes] = useState("");
+  const [riskConfig, setRiskConfig] = useState<RiskConfig>({});
+  const [costsConfig, setCostsConfig] = useState<CostsConfig>({});
+  const [settingsState, setSettingsState] = useState<FetchState>("idle");
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
   useEffect(() => {
     const today = new Date();
     const iso = today.toISOString().slice(0, 10);
@@ -160,9 +226,10 @@ export const BacktestsPage = () => {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        const [strategiesRes, backtestsRes] = await Promise.all([
+        const [strategiesRes, backtestsRes, coverageRes] = await Promise.all([
           fetch(`${API_BASE}/api/strategies`),
-          fetch(`${API_BASE}/api/backtests`)
+          fetch(`${API_BASE}/api/backtests`),
+          fetch(`${API_BASE}/api/data/summary`)
         ]);
 
         if (strategiesRes.ok) {
@@ -177,9 +244,24 @@ export const BacktestsPage = () => {
           const backtestData: Backtest[] = await backtestsRes.json();
           setBacktests(backtestData);
           if (backtestData.length > 0) {
-            setSelectedBacktestId(backtestData[0].id);
-            setSelectedBacktest(backtestData[0]);
+            const first = backtestData[0];
+            setSelectedBacktestId(first.id);
+            setSelectedBacktest(first);
+            const vc = (first.visual_config ?? {}) as VisualConfig;
+            setVisualSettings({
+              showTradeMarkers: vc.showTradeMarkers ?? true,
+              showProjection: vc.showProjection ?? true,
+              showVolume: vc.showVolume ?? true
+            });
             setPage(0);
+          }
+        }
+
+        if (coverageRes.ok) {
+          const data: DataSummaryItem[] = await coverageRes.json();
+          setCoverageSummary(data);
+          if (data.length > 0) {
+            setSelectedCoverageId(data[0].coverage_id);
           }
         }
       } catch {
@@ -200,7 +282,6 @@ export const BacktestsPage = () => {
   useEffect(() => {
     const loadParams = async () => {
       if (!selectedStrategyId) {
-        setParams([]);
         setSelectedParamsId(null);
         return;
       }
@@ -210,9 +291,11 @@ export const BacktestsPage = () => {
         );
         if (!res.ok) return;
         const data: StrategyParameter[] = await res.json();
-        setParams(data);
         if (data.length > 0) {
-          setSelectedParamsId(data[0].id);
+          // Prefer an explicit api_default label where present; otherwise
+          // fall back to the first parameter for the strategy.
+          const apiDefault = data.find((p) => p.label === "api_default");
+          setSelectedParamsId((apiDefault ?? data[0]).id);
         } else {
           setSelectedParamsId(null);
         }
@@ -249,15 +332,90 @@ export const BacktestsPage = () => {
       }
     }
 
+    // Determine effective symbol/timeframe/date range, either from a selected
+    // coverage row or from the manual form inputs.
+    let effectiveSymbol = symbol.trim().toUpperCase();
+    let effectiveTimeframe = timeframe;
+    let effectiveStartDate = startDate;
+    let effectiveEndDate = endDate;
+    let effectivePriceSource = priceSource || null;
+
+    if (useExistingCoverage) {
+      const cov = coverageSummary.find(
+        (c) => c.coverage_id === selectedCoverageId
+      );
+      if (!cov) {
+        setRunState("error");
+        setRunMessage("Select a coverage ID or switch to fresh data.");
+        return;
+      }
+
+      effectiveSymbol = cov.symbol;
+      effectiveTimeframe = cov.timeframe;
+      effectiveStartDate = cov.start_timestamp.slice(0, 10);
+      effectiveEndDate = cov.end_timestamp.slice(0, 10);
+      effectivePriceSource = cov.source ?? priceSource ?? null;
+    } else {
+      // When fetching fresh data, ensure required fields are present.
+      if (!symbol.trim() || !timeframe || !startDate || !endDate) {
+        setRunState("error");
+        setRunMessage(
+          "Provide symbol, interval, and date range when fetching fresh data."
+        );
+        return;
+      }
+
+      // Trigger a fresh data fetch so the prices DB is up-to-date for this
+      // backtest. The Data page will also reflect the updated coverage.
+      try {
+        const fetchPayload = {
+          symbol: symbol.trim().toUpperCase(),
+          timeframe,
+          start_date: startDate,
+          end_date: endDate,
+          source: priceSource === "kite" || priceSource === "yfinance"
+            ? (priceSource as "kite" | "yfinance")
+            : "kite",
+          csv_path: null,
+          exchange
+        };
+        const fetchRes = await fetch(`${API_BASE}/api/data/fetch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(fetchPayload)
+        });
+        if (!fetchRes.ok) {
+          const err = await fetchRes.json().catch(() => ({}));
+          setRunState("error");
+          setRunMessage(err.detail ?? "Failed to fetch fresh data for backtest");
+          return;
+        }
+        // Reload coverage summary so the new/updated coverage is available.
+        const coverageRes = await fetch(`${API_BASE}/api/data/summary`);
+        if (coverageRes.ok) {
+          const data: DataSummaryItem[] = await coverageRes.json();
+          setCoverageSummary(data);
+        }
+      } catch (error) {
+        setRunState("error");
+        setRunMessage(
+          error instanceof Error
+            ? error.message
+            : "Unexpected error while fetching fresh data"
+        );
+        return;
+      }
+    }
+
     const payload: Record<string, unknown> = {
       strategy_id: selectedStrategyId,
       params_id: selectedParamsId,
-      symbol: symbol.trim().toUpperCase(),
-      timeframe,
-      start_date: startDate,
-      end_date: endDate,
+      symbol: effectiveSymbol,
+      timeframe: effectiveTimeframe,
+      start_date: effectiveStartDate,
+      end_date: effectiveEndDate,
       initial_capital: Number(initialCapital) || 0,
-      price_source: priceSource || null,
+      price_source: effectivePriceSource,
       params: overrides
     };
 
@@ -362,6 +520,14 @@ export const BacktestsPage = () => {
         setEquity(chart.equity_curve);
         setProjection(chart.projection_curve);
         setTrades(chart.trades);
+        const b = chart.backtest;
+        setSelectedBacktest(b);
+        const vc = (b.visual_config ?? {}) as VisualConfig;
+        setVisualSettings({
+          showTradeMarkers: vc.showTradeMarkers ?? true,
+          showProjection: vc.showProjection ?? true,
+          showVolume: vc.showVolume ?? true
+        });
       }
 
       if (backtest.params_id != null) {
@@ -468,6 +634,8 @@ export const BacktestsPage = () => {
     });
   })();
 
+  const [showTradesTable, setShowTradesTable] = useState(false);
+
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
@@ -518,71 +686,102 @@ export const BacktestsPage = () => {
                     select
                     fullWidth
                     margin="normal"
-                    label="Parameter set (optional)"
-                    value={selectedParamsId ?? ""}
+                    label="Data mode"
+                    helperText="Use existing coverage (ID) or fetch fresh data"
+                    value={useExistingCoverage ? "existing" : "fresh"}
                     onChange={(e) =>
-                      setSelectedParamsId(
-                        e.target.value === ""
-                          ? null
-                          : Number.parseInt(e.target.value, 10)
-                      )
+                      setUseExistingCoverage(e.target.value === "existing")
                     }
                   >
-                    <MenuItem value="">None</MenuItem>
-                    {params.map((p) => (
-                      <MenuItem key={p.id} value={p.id}>
-                        {p.label}
-                      </MenuItem>
-                    ))}
+                    <MenuItem value="existing">Use existing coverage</MenuItem>
+                    <MenuItem value="fresh">Fetch fresh data</MenuItem>
                   </TextField>
 
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Symbol"
-                    value={symbol}
-                    onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                  />
-
-                  <TextField
-                    select
-                    fullWidth
-                    margin="normal"
-                    label="Timeframe"
-                    value={timeframe}
-                    onChange={(e) => setTimeframe(e.target.value)}
-                  >
-                    <MenuItem value="1m">1 minute</MenuItem>
-                    <MenuItem value="5m">5 minutes</MenuItem>
-                    <MenuItem value="15m">15 minutes</MenuItem>
-                    <MenuItem value="1h">1 hour</MenuItem>
-                    <MenuItem value="1d">1 day</MenuItem>
-                  </TextField>
-
-                  <Grid container spacing={2}>
-                    <Grid item xs={6}>
+                  {useExistingCoverage ? (
+                    <>
+                      <TextField
+                        select
+                        fullWidth
+                        margin="normal"
+                        label="Coverage ID"
+                        value={selectedCoverageId}
+                        onChange={(e) => setSelectedCoverageId(e.target.value)}
+                      >
+                        {coverageSummary.map((c) => (
+                          <MenuItem key={c.coverage_id} value={c.coverage_id}>
+                            {c.coverage_id} – {c.symbol} {c.timeframe}{" "}
+                            {c.source ?? ""}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                    </>
+                  ) : (
+                    <>
                       <TextField
                         fullWidth
                         margin="normal"
-                        label="Start date"
-                        type="date"
-                        InputLabelProps={{ shrink: true }}
-                        value={startDate}
-                        onChange={(e) => setStartDate(e.target.value)}
+                        label="Symbol"
+                        value={symbol}
+                        onChange={(e) => setSymbol(e.target.value.toUpperCase())}
                       />
-                    </Grid>
-                    <Grid item xs={6}>
+
                       <TextField
+                        select
                         fullWidth
                         margin="normal"
-                        label="End date"
-                        type="date"
-                        InputLabelProps={{ shrink: true }}
-                        value={endDate}
-                        onChange={(e) => setEndDate(e.target.value)}
-                      />
-                    </Grid>
-                  </Grid>
+                        label="Exchange"
+                        value={exchange}
+                        onChange={(e) => setExchange(e.target.value)}
+                      >
+                        <MenuItem value="NSE">NSE</MenuItem>
+                        <MenuItem value="BSE">BSE</MenuItem>
+                        <MenuItem value="US">US</MenuItem>
+                        <MenuItem value="CRYPTO">CRYPTO</MenuItem>
+                      </TextField>
+
+                      <TextField
+                        select
+                        fullWidth
+                        margin="normal"
+                        label="Interval"
+                        value={timeframe}
+                        onChange={(e) => setTimeframe(e.target.value)}
+                      >
+                        <MenuItem value="1m">1 minute</MenuItem>
+                        <MenuItem value="3m">3 minutes</MenuItem>
+                        <MenuItem value="5m">5 minutes</MenuItem>
+                        <MenuItem value="15m">15 minutes</MenuItem>
+                        <MenuItem value="30m">30 minutes</MenuItem>
+                        <MenuItem value="1h">1 hour</MenuItem>
+                        <MenuItem value="1d">1 day</MenuItem>
+                      </TextField>
+
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="Start date"
+                            type="date"
+                            InputLabelProps={{ shrink: true }}
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                          />
+                        </Grid>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="End date"
+                            type="date"
+                            InputLabelProps={{ shrink: true }}
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                          />
+                        </Grid>
+                      </Grid>
+                    </>
+                  )}
 
                   <TextField
                     fullWidth
@@ -809,9 +1008,46 @@ export const BacktestsPage = () => {
         <Box mt={3}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Backtest Details – #{selectedBacktest.id}
-              </Typography>
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  mb: 1
+                }}
+              >
+                <Typography variant="h6">
+                  Backtest Details – #{selectedBacktest.id}
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    if (!selectedBacktest) return;
+                    setSettingsError(null);
+                    setSettingsState("idle");
+                    setSettingsTab("inputs");
+                    setSettingsLabel(selectedBacktest.label ?? "");
+                    setSettingsNotes(selectedBacktest.notes ?? "");
+                    const rc = (selectedBacktest.risk_config ??
+                      {}) as RiskConfig;
+                    const cc = (selectedBacktest.costs_config ??
+                      {}) as CostsConfig;
+                    setRiskConfig(rc);
+                    setCostsConfig(cc);
+                    const vc = (selectedBacktest.visual_config ??
+                      {}) as VisualConfig;
+                    setVisualSettings({
+                      showTradeMarkers: vc.showTradeMarkers ?? true,
+                      showProjection: vc.showProjection ?? true,
+                      showVolume: vc.showVolume ?? true
+                    });
+                    setSettingsOpen(true);
+                  }}
+                >
+                  Settings
+                </Button>
+              </Box>
               <Grid container spacing={3}>
                 <Grid item xs={12} md={4}>
                   <Typography variant="subtitle2" gutterBottom>
@@ -902,6 +1138,11 @@ export const BacktestsPage = () => {
                         projectionCurve={projection}
                         trades={trades}
                         height={360}
+                        showTradeMarkers={
+                          visualSettings.showTradeMarkers ?? true
+                        }
+                        showProjection={visualSettings.showProjection ?? true}
+                        showVolume={visualSettings.showVolume ?? true}
                       />
                     </Box>
                   )}
@@ -911,25 +1152,36 @@ export const BacktestsPage = () => {
                       Trades
                     </Typography>
                     <Box mb={1}>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={() => {
-                          if (!selectedBacktest) return;
-                          window.open(
-                            `${API_BASE}/api/backtests/${selectedBacktest.id}/trades/export`,
-                            "_blank"
-                          );
-                        }}
-                      >
-                        Export CSV
-                      </Button>
+                      <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            if (!selectedBacktest) return;
+                            window.open(
+                              `${API_BASE}/api/backtests/${selectedBacktest.id}/trades/export`,
+                              "_blank"
+                            );
+                          }}
+                        >
+                          Export CSV
+                        </Button>
+                        {trades.length > 0 && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => setShowTradesTable((prev) => !prev)}
+                          >
+                            {showTradesTable ? "Hide trades table" : "Show trades table"}
+                          </Button>
+                        )}
+                      </Box>
                     </Box>
                     {trades.length === 0 ? (
                       <Typography variant="body2" color="textSecondary">
                         No trades recorded for this backtest.
                       </Typography>
-                    ) : (
+                    ) : showTradesTable ? (
                       <Table size="small">
                         <TableHead>
                           <TableRow>
@@ -1000,23 +1252,400 @@ export const BacktestsPage = () => {
                           ))}
                         </TableBody>
                       </Table>
-                    )}
-                  </Box>
-
-                  <Box mt={3}>
-                    <Typography variant="subtitle2" gutterBottom>
-                      Equity Data (last 50 bars)
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      Equity data table removed; use the chart and trades table
-                      above to inspect performance.
-                    </Typography>
+                    ) : null}
                   </Box>
                 </Grid>
               </Grid>
             </CardContent>
           </Card>
         </Box>
+      )}
+
+      {selectedBacktest && (
+        <Dialog
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>
+            Backtest Settings – #{selectedBacktest.id}
+          </DialogTitle>
+          <DialogContent dividers>
+            <Tabs
+              value={settingsTab}
+              onChange={(_, value) =>
+                setSettingsTab(value as typeof settingsTab)
+              }
+              variant="scrollable"
+              scrollButtons="auto"
+            >
+              <Tab label="Inputs" value="inputs" />
+              <Tab label="Risk" value="risk" />
+              <Tab label="Costs" value="costs" />
+              <Tab label="Visualization" value="visual" />
+              <Tab label="Meta / Notes" value="meta" />
+            </Tabs>
+            <Box mt={2}>
+              {settingsTab === "inputs" && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Strategy inputs
+                  </Typography>
+                  {paramDetail ? (
+                    <>
+                      <Typography variant="body2" gutterBottom>
+                        Parameter label: {paramDetail.label}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        component="pre"
+                        sx={{
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          whiteSpace: "pre-wrap",
+                          backgroundColor: "rgba(255,255,255,0.02)",
+                          p: 1,
+                          borderRadius: 1
+                        }}
+                      >
+                        {JSON.stringify(paramDetail.params, null, 2)}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        color="textSecondary"
+                        mt={1}
+                      >
+                        Inputs are currently read-only; parameter overrides per
+                        backtest can be added in a later sprint.
+                      </Typography>
+                    </>
+                  ) : (
+                    <Typography variant="body2" color="textSecondary">
+                      No parameter detail available for this backtest.
+                    </Typography>
+                  )}
+                </Box>
+              )}
+
+              {settingsTab === "risk" && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Risk settings (stored metadata)
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Max position size (% of capital)"
+                    type="number"
+                    value={riskConfig.maxPositionSizePct ?? ""}
+                    onChange={(e) =>
+                      setRiskConfig((prev) => ({
+                        ...prev,
+                        maxPositionSizePct:
+                          e.target.value === ""
+                            ? null
+                            : Number.parseFloat(e.target.value)
+                      }))
+                    }
+                  />
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Per-trade risk (% of capital)"
+                    type="number"
+                    value={riskConfig.perTradeRiskPct ?? ""}
+                    onChange={(e) =>
+                      setRiskConfig((prev) => ({
+                        ...prev,
+                        perTradeRiskPct:
+                          e.target.value === ""
+                            ? null
+                            : Number.parseFloat(e.target.value)
+                      }))
+                    }
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={Boolean(riskConfig.allowShortSelling)}
+                        onChange={(e) =>
+                          setRiskConfig((prev) => ({
+                            ...prev,
+                            allowShortSelling: e.target.checked
+                          }))
+                        }
+                      />
+                    }
+                    label="Allow short selling"
+                  />
+                  <Grid container spacing={2} mt={1}>
+                    <Grid item xs={6}>
+                      <TextField
+                        fullWidth
+                        margin="normal"
+                        label="Default stop-loss (%)"
+                        type="number"
+                        value={riskConfig.stopLossPct ?? ""}
+                        onChange={(e) =>
+                          setRiskConfig((prev) => ({
+                            ...prev,
+                            stopLossPct:
+                              e.target.value === ""
+                                ? null
+                                : Number.parseFloat(e.target.value)
+                          }))
+                        }
+                      />
+                    </Grid>
+                    <Grid item xs={6}>
+                      <TextField
+                        fullWidth
+                        margin="normal"
+                        label="Default take-profit (%)"
+                        type="number"
+                        value={riskConfig.takeProfitPct ?? ""}
+                        onChange={(e) =>
+                          setRiskConfig((prev) => ({
+                            ...prev,
+                            takeProfitPct:
+                              e.target.value === ""
+                                ? null
+                                : Number.parseFloat(e.target.value)
+                          }))
+                        }
+                      />
+                    </Grid>
+                  </Grid>
+                </Box>
+              )}
+
+              {settingsTab === "costs" && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Costs & fees (stored metadata)
+                  </Typography>
+                  <TextField
+                    select
+                    fullWidth
+                    margin="normal"
+                    label="Commission type"
+                    value={costsConfig.commissionType ?? ""}
+                    onChange={(e) =>
+                      setCostsConfig((prev) => ({
+                        ...prev,
+                        commissionType:
+                          (e.target.value as "flat" | "percent" | "") || null
+                      }))
+                    }
+                  >
+                    <MenuItem value="">None</MenuItem>
+                    <MenuItem value="flat">Flat per trade</MenuItem>
+                    <MenuItem value="percent">Percent of notional</MenuItem>
+                  </TextField>
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Commission value"
+                    type="number"
+                    value={costsConfig.commissionValue ?? ""}
+                    onChange={(e) =>
+                      setCostsConfig((prev) => ({
+                        ...prev,
+                        commissionValue:
+                          e.target.value === ""
+                            ? null
+                            : Number.parseFloat(e.target.value)
+                      }))
+                    }
+                  />
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}>
+                      <TextField
+                        fullWidth
+                        margin="normal"
+                        label="Slippage per share"
+                        type="number"
+                        value={costsConfig.slippagePerShare ?? ""}
+                        onChange={(e) =>
+                          setCostsConfig((prev) => ({
+                            ...prev,
+                            slippagePerShare:
+                              e.target.value === ""
+                                ? null
+                                : Number.parseFloat(e.target.value)
+                          }))
+                        }
+                      />
+                    </Grid>
+                    <Grid item xs={6}>
+                      <TextField
+                        fullWidth
+                        margin="normal"
+                        label="Other charges (%)"
+                        type="number"
+                        value={costsConfig.otherChargesPct ?? ""}
+                        onChange={(e) =>
+                          setCostsConfig((prev) => ({
+                            ...prev,
+                            otherChargesPct:
+                              e.target.value === ""
+                                ? null
+                                : Number.parseFloat(e.target.value)
+                          }))
+                        }
+                      />
+                    </Grid>
+                  </Grid>
+                </Box>
+              )}
+
+              {settingsTab === "visual" && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Visualization
+                  </Typography>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={Boolean(visualSettings.showTradeMarkers ?? true)}
+                        onChange={(e) =>
+                          setVisualSettings((prev) => ({
+                            ...prev,
+                            showTradeMarkers: e.target.checked
+                          }))
+                        }
+                      />
+                    }
+                    label="Show trade markers (entries/exits)"
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={Boolean(visualSettings.showProjection ?? true)}
+                        onChange={(e) =>
+                          setVisualSettings((prev) => ({
+                            ...prev,
+                            showProjection: e.target.checked
+                          }))
+                        }
+                      />
+                    }
+                    label="Show unrealised projection curve"
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={Boolean(visualSettings.showVolume ?? true)}
+                        onChange={(e) =>
+                          setVisualSettings((prev) => ({
+                            ...prev,
+                            showVolume: e.target.checked
+                          }))
+                        }
+                      />
+                    }
+                    label="Show volume histogram"
+                  />
+                </Box>
+              )}
+
+              {settingsTab === "meta" && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Meta & notes
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Backtest label"
+                    value={settingsLabel}
+                    onChange={(e) => setSettingsLabel(e.target.value)}
+                  />
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Notes"
+                    multiline
+                    minRows={3}
+                    value={settingsNotes}
+                    onChange={(e) => setSettingsNotes(e.target.value)}
+                  />
+                </Box>
+              )}
+
+              {settingsState === "error" && settingsError && (
+                <Typography variant="body2" color="error" mt={2}>
+                  {settingsError}
+                </Typography>
+              )}
+              {settingsState === "success" && (
+                <Typography variant="body2" color="textSecondary" mt={2}>
+                  Settings updated for this backtest.
+                </Typography>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setSettingsOpen(false)}>Close</Button>
+            <Button
+              variant="contained"
+              disabled={settingsState === "loading"}
+              onClick={async () => {
+                if (!selectedBacktest) return;
+                setSettingsState("loading");
+                setSettingsError(null);
+                try {
+                  const payload: Record<string, unknown> = {
+                    label: settingsLabel || null,
+                    notes: settingsNotes || null,
+                    risk_config: riskConfig,
+                    costs_config: costsConfig,
+                    visual_config: visualSettings
+                  };
+                  const res = await fetch(
+                    `${API_BASE}/api/backtests/${selectedBacktest.id}/settings`,
+                    {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(payload)
+                    }
+                  );
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    setSettingsState("error");
+                    setSettingsError(
+                      (err as { detail?: string }).detail ??
+                        "Failed to update settings"
+                    );
+                    return;
+                  }
+                  const updated: Backtest = await res.json();
+                  setSelectedBacktest(updated);
+                  setBacktests((prev) =>
+                    prev.map((b) => (b.id === updated.id ? updated : b))
+                  );
+                  const vc = (updated.visual_config ?? {}) as VisualConfig;
+                  setVisualSettings({
+                    showTradeMarkers: vc.showTradeMarkers ?? true,
+                    showProjection: vc.showProjection ?? true,
+                    showVolume: vc.showVolume ?? true
+                  });
+                  setSettingsState("success");
+                } catch (error) {
+                  setSettingsState("error");
+                  setSettingsError(
+                    error instanceof Error
+                      ? error.message
+                      : "Unexpected error while saving settings"
+                  );
+                }
+              }}
+            >
+              Save
+            </Button>
+          </DialogActions>
+        </Dialog>
       )}
     </Box>
   );

@@ -49,6 +49,13 @@ class DataFetchResponse(BaseModel):
 class DataSummaryItem(BaseModel):
     """Aggregated coverage summary for a symbol/timeframe."""
 
+    coverage_id: str = Field(
+        ...,
+        description=(
+            "Stable coverage identifier of the form "
+            "<symbol>_<exchange>_<source>_<NNNNN>."
+        ),
+    )
     symbol: str
     exchange: str | None = None
     timeframe: str
@@ -199,6 +206,28 @@ class BacktestCreateRequest(BaseModel):
         default=None,
         description="Label for data source used (e.g. kite, yfinance, synthetic)",
     )
+    label: str | None = Field(
+        default=None,
+        description="Optional human-friendly label for this backtest run",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Optional free-form notes about this backtest configuration",
+    )
+    risk_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional risk settings (max position size, per-trade risk, etc.)",
+    )
+    costs_config: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional costs/fees settings (commission, slippage, other charges)"
+        ),
+    )
+    visual_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional visualisation settings for the backtest chart",
+    )
 
 
 class BacktestRead(BaseModel):
@@ -208,6 +237,8 @@ class BacktestRead(BaseModel):
     strategy_id: int
     params_id: int | None
     engine: str
+    label: str | None = None
+    notes: str | None = None
     symbols_json: list[str]
     timeframe: str
     start_date: datetime
@@ -215,6 +246,18 @@ class BacktestRead(BaseModel):
     initial_capital: float
     status: str
     metrics: dict[str, Any] = Field(validation_alias="metrics_json")
+    risk_config: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias="risk_config_json",
+    )
+    costs_config: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias="costs_config_json",
+    )
+    visual_config: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias="visual_config_json",
+    )
     data_source: str | None = None
     created_at: datetime
     finished_at: datetime | None = None

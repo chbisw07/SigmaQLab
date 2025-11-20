@@ -40,6 +40,9 @@ type BacktestDetailChartProps = {
   projectionCurve: EquityPoint[];
   trades: Trade[];
   height: number;
+  showTradeMarkers: boolean;
+  showProjection: boolean;
+  showVolume: boolean;
 };
 
 const PRICE_BG = "#121212";
@@ -58,7 +61,10 @@ export const BacktestDetailChart = ({
   equityCurve,
   projectionCurve,
   trades,
-  height
+  height,
+  showTradeMarkers,
+  showProjection,
+  showVolume
 }: BacktestDetailChartProps) => {
   const priceContainerRef = useRef<HTMLDivElement | null>(null);
   const equityContainerRef = useRef<HTMLDivElement | null>(null);
@@ -156,13 +162,15 @@ export const BacktestDetailChart = ({
       priceLineWidth: 1
     });
 
-    const volumeSeries = priceChart.addHistogramSeries({
-      priceScaleId: "",
-      scaleMargins: {
-        top: 0.8,
-        bottom: 0
-      }
-    });
+    const volumeSeries = showVolume
+      ? priceChart.addHistogramSeries({
+          priceScaleId: "",
+          scaleMargins: {
+            top: 0.8,
+            bottom: 0
+          }
+        })
+      : undefined;
 
     const candleData: CandlestickData[] = dedupedPriceBars.map((bar) => ({
       time: toUtcSeconds(bar.timestamp),
@@ -173,13 +181,15 @@ export const BacktestDetailChart = ({
     }));
     candles.setData(candleData);
 
-    const volumeData: HistogramData[] = dedupedPriceBars.map((bar) => ({
-      time: toUtcSeconds(bar.timestamp),
-      value: bar.volume ?? 0,
-      color:
-        bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR
-    }));
-    volumeSeries.setData(volumeData);
+    if (volumeSeries) {
+      const volumeData: HistogramData[] = dedupedPriceBars.map((bar) => ({
+        time: toUtcSeconds(bar.timestamp),
+        value: bar.volume ?? 0,
+        color:
+          bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR
+      }));
+      volumeSeries.setData(volumeData);
+    }
 
     // Trade markers: entry/exit markers per trade.
     const markers: {
@@ -190,26 +200,28 @@ export const BacktestDetailChart = ({
       text: string;
     }[] = [];
 
-    trades.forEach((trade) => {
-      const isLong = trade.side.toLowerCase() === "long";
-      const entryTime = toUtcSeconds(trade.entry_timestamp);
-      const exitTime = toUtcSeconds(trade.exit_timestamp);
+    if (showTradeMarkers) {
+      trades.forEach((trade) => {
+        const isLong = trade.side.toLowerCase() === "long";
+        const entryTime = toUtcSeconds(trade.entry_timestamp);
+        const exitTime = toUtcSeconds(trade.exit_timestamp);
 
-      markers.push({
-        time: entryTime,
-        position: isLong ? "belowBar" : "aboveBar",
-        color: isLong ? "#4caf50" : "#ef5350",
-        shape: isLong ? "arrowUp" : "arrowDown",
-        text: "E"
+        markers.push({
+          time: entryTime,
+          position: isLong ? "belowBar" : "aboveBar",
+          color: isLong ? "#4caf50" : "#ef5350",
+          shape: isLong ? "arrowUp" : "arrowDown",
+          text: "E"
+        });
+        markers.push({
+          time: exitTime,
+          position: isLong ? "aboveBar" : "belowBar",
+          color: isLong ? "#4caf50" : "#ef5350",
+          shape: isLong ? "arrowDown" : "arrowUp",
+          text: "X"
+        });
       });
-      markers.push({
-        time: exitTime,
-        position: isLong ? "aboveBar" : "belowBar",
-        color: isLong ? "#4caf50" : "#ef5350",
-        shape: isLong ? "arrowDown" : "arrowUp",
-        text: "X"
-      });
-    });
+    }
 
     if (markers.length > 0) {
       candles.setMarkers(markers);
@@ -246,7 +258,7 @@ export const BacktestDetailChart = ({
       }));
       eqSeries.setData(eqData);
 
-      if (projectionNorm.length > 0) {
+      if (showProjection && projectionNorm.length > 0) {
         const projSeries = equityChart.addLineSeries({
           color: "#ffb74d",
           lineWidth: 1,
@@ -296,7 +308,16 @@ export const BacktestDetailChart = ({
         equityChart.remove();
       }
     };
-  }, [priceBars, equityCurve, projectionCurve, trades, height]);
+  }, [
+    priceBars,
+    equityCurve,
+    projectionCurve,
+    trades,
+    height,
+    showTradeMarkers,
+    showProjection,
+    showVolume
+  ]);
 
   return (
     <div>

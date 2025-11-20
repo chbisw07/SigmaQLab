@@ -62,6 +62,11 @@ class BacktestService:
         params: Dict[str, Any] | None = None,
         params_id: int | None = None,
         price_source: str | None = None,
+        label: str | None = None,
+        notes: str | None = None,
+        risk_config: Dict[str, Any] | None = None,
+        costs_config: Dict[str, Any] | None = None,
+        visual_config: Dict[str, Any] | None = None,
     ) -> Backtest:
         """Run a single backtest and persist a Backtest record.
 
@@ -151,6 +156,8 @@ class BacktestService:
             strategy_id=strategy.id,
             params_id=params_id,
             engine="backtrader",
+            label=label,
+            notes=notes,
             symbols_json=[symbol],
             timeframe=timeframe,
             start_date=start,
@@ -158,9 +165,9 @@ class BacktestService:
             initial_capital=initial_capital,
             starting_portfolio_json=None,
             params_effective_json=resolved_params or None,
-            risk_config_json=None,
-            costs_config_json=None,
-            visual_config_json=None,
+            risk_config_json=risk_config,
+            costs_config_json=costs_config,
+            visual_config_json=visual_config,
             status="completed",
             metrics_json=metrics,
             data_source=price_source,

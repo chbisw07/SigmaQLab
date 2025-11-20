@@ -89,6 +89,7 @@ async def get_data_summary(
 
     return [
         DataSummaryItem(
+            coverage_id=_build_coverage_id(symbol, exchange, source),
             symbol=symbol,
             exchange=exchange,
             timeframe=timeframe,
@@ -99,6 +100,25 @@ async def get_data_summary(
         )
         for symbol, exchange, timeframe, source, start_ts, end_ts, bar_count in rows
     ]
+
+
+def _build_coverage_id(
+    symbol: str,
+    exchange: str | None,
+    source: str | None,
+) -> str:
+    """Return a stable coverage identifier for a (symbol, exchange, source).
+
+    For now we expose a single synthetic coverage per combination using a
+    zero-padded sequence suffix. This keeps the identifier stable while
+    leaving room for future extensions where multiple coverage windows could
+    be tracked explicitly.
+    """
+
+    ex = (exchange or "NA").upper()
+    src = (source or "NA").lower()
+    sequence = 0
+    return f"{symbol}_{ex}_{src}_{sequence:05d}"
 
 
 @router.delete("/bars", status_code=204)
