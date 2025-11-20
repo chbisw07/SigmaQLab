@@ -125,6 +125,45 @@ def test_create_backtest_via_api() -> None:
     assert export_resp.status_code == 200
     assert "text/csv" in export_resp.headers.get("content-type", "")
 
+    # Settings endpoint should allow updating label, notes and configs without
+    # affecting core behaviour.
+    settings_payload = {
+        "label": "API test run",
+        "notes": "BacktestOverhaul settings smoke test",
+        "risk_config": {
+            "maxPositionSizePct": 10.0,
+            "perTradeRiskPct": 1.0,
+            "allowShortSelling": False,
+        },
+        "costs_config": {
+            "commissionType": "percent",
+            "commissionValue": 0.01,
+        },
+        "visual_config": {
+            "showTradeMarkers": False,
+            "showProjection": True,
+            "showVolume": True,
+        },
+    }
+    settings_resp = client.patch(
+        f"/api/backtests/{backtest['id']}/settings",
+        json=settings_payload,
+    )
+    assert settings_resp.status_code == 200, settings_resp.text
+    updated = settings_resp.json()
+    assert updated["label"] == "API test run"
+    assert updated["notes"].startswith("BacktestOverhaul")
+    assert updated["risk_config"]["maxPositionSizePct"] == 10.0
+    assert updated["costs_config"]["commissionType"] == "percent"
+    assert updated["visual_config"]["showTradeMarkers"] is False
+
+    # Detail endpoint should reflect the same settings.
+    detail_resp = client.get(f"/api/backtests/{backtest['id']}")
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+    assert detail["label"] == "API test run"
+    assert detail["visual_config"]["showProjection"] is True
+
     # Delete the backtest and ensure it no longer appears.
     delete_resp = client.delete(f"/api/backtests/{backtest['id']}")
     assert delete_resp.status_code == 204

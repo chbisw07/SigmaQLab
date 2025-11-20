@@ -1379,3 +1379,130 @@ Sprint workbook updates for S06/G02:
   - `S06_G02_TB003` – records the CSV export endpoint for backtest trades.
   - `S06_G02_TB004` – states that expanded metrics are exposed via `BacktestRead` and reused in chart-data responses.
   All four tasks are marked `implemented`.
+
+---
+
+## Sprint S07 – Backtest Overhaul UI: Backtest Detail, Settings, Trades (G01–G03)
+
+**Groups:**
+
+- G01 – Backtest detail chart (price, volume, indicators, trades)
+- G02 – Strategy/backtest settings panel
+- G03 – Trades table and exports
+
+**Tasks:** S07_G01_TF001–TF003, S07_G02_TF001–TF002, S07_G03_TF001–TF002
+**Status (Codex):** implemented
+
+### S07_G01_TF001 – Backtest detail chart (Price & Trades)
+
+- Implemented a dedicated `BacktestDetailChart` React component in `frontend/src/features/backtests/components/BacktestDetailChart.tsx` that uses `lightweight-charts` to render:
+  - A **price pane** with candlestick OHLC bars and an optional volume histogram.
+  - An **equity pane** with realised equity curve and an optional “projection” curve (unrealised what-if path).
+  - Entry/exit markers (`E` / `X`) for each trade, coloured by side (long/short).
+- The chart normalises times (sorting and deduplicating timestamps) to satisfy lightweight-charts’ strict ordering requirements and keeps price and equity panes time-synchronised.
+- The Backtests page (`frontend/src/pages/BacktestsPage.tsx`) embeds this component under “Price & Trades” in the **Backtest Details** card.
+
+### S07_G01_TF002 – Recent Backtests UX polish
+
+- Extended the **Recent Backtests** card to support:
+  - Row-level checkboxes and a “Select page” button.
+  - A “Delete selected” button that issues `DELETE /api/backtests/{id}` per selected row and cleans up equity/trade rows.
+  - Pagination controls (`<<`, `<`, page size, `>`, `>>`) so large histories remain manageable.
+- The table now shows ID, strategy, symbols, timeframe, status, PnL, final value, and created time (rendered in IST).
+
+### S07_G02_TF001 – Backtest settings schema and API
+
+- Extended the backtest schema (`backend/app/schemas.py`, `backend/app/models.py`) and service to support settings metadata:
+  - New fields on `BacktestCreateRequest`: `label`, `notes`, `risk_config`, `costs_config`, `visual_config`.
+  - New fields on `BacktestRead` (mapped via `validation_alias`): `label`, `notes`, `risk_config`, `costs_config`, `visual_config`.
+  - `BacktestService.run_single_backtest(...)` now accepts the same optional settings and persists them into `label`, `notes`, `risk_config_json`, `costs_config_json`, `visual_config_json`.
+- Added a settings-specific update endpoint in `backend/app/routers/backtests.py`:
+  - `PATCH /api/backtests/{id}/settings` with payload `BacktestSettingsUpdate` (`backend/app/schemas_backtest_settings.py`).
+  - Updates label/notes and the three config JSON blobs without re-running the engine.
+
+### S07_G02_TF002 – Backtest settings UI (modal)
+
+- Implemented a **Backtest Settings** modal on the Backtests page:
+  - Opened via a `Settings` button in the Backtest Details header.
+  - Tabs:
+    - **Inputs** – read-only view of the parameter set used for this run.
+    - **Risk** – fields for max position size %, per-trade risk %, allow short selling, and default stop-loss/take-profit percentages.
+    - **Costs** – commission type (flat/percent), commission value, slippage per share, other charges %.
+    - **Visualization** – switches to toggle trade markers, projection curve, and volume histogram.
+    - **Meta / Notes** – editable label and free-form notes for the backtest.
+- On save, the modal calls `PATCH /api/backtests/{id}/settings` and:
+  - Updates the backtest object in state and in the Recent Backtests list.
+  - Applies the visual settings immediately to `BacktestDetailChart`.
+
+### S07_G03_TF001 – Trades table and what-if metrics
+
+- Extended the Backtest Details view with a **Trades** section:
+  - An **Export CSV** button that hits `GET /api/backtests/{id}/trades/export`.
+  - A **Show trades table / Hide trades table** toggle.
+  - A detailed table when trades are present, showing:
+    - ID, symbol, side, size.
+    - Entry/exit timestamps and prices.
+    - PnL, PnL %, equity at exit.
+    - What-if PnL, capture %, cumulative PnL across trades.
+- The table uses the enriched `BacktestTradeRead` model (S06) plus a small client-side reducer to compute cumulative PnL and equity-at-exit (using the equity curve).
+
+### S07_G03_TF002 – Removal of obsolete equity table
+
+- Removed the older “Equity Data (last 50 bars)” placeholder section in favour of the chart + trades table, to keep the Backtest Details area focused and uncluttered.
+
+Sprint workbook updates for S07:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` is expected to mark:
+  - `S07_G01_TF001–TF002`, `S07_G02_TF001–TF002`, and `S07_G03_TF001–TF002` as `implemented`, with remarks pointing to:
+    - BacktestDetailChart, the Backtests page updates, the Settings modal, and the trades table/export.
+
+---
+
+## Sprint S08 – Backtest Overhaul: Documentation, Regression Tests, and Polish (G01)
+
+**Group:** G01 – Backtest Overhaul: documentation, regression tests, and polish
+**Tasks:** S08_G01_TB001–TB003
+**Status (Codex):** implemented
+
+### S08_G01_TB001 – Backtests section in User Manual
+
+- Updated `docs/qlab_user_manual.md` to fully reflect the Backtest Overhaul:
+  - Data section:
+    - Coverage Summary now documents a stable **Coverage ID** column (`SYMBOL_EXCHANGE_SOURCE_00000`) and explains how it’s generated from `(symbol, exchange, timeframe, source)` and used by the Backtests page.
+  - Backtests section:
+    - Run Backtest form now describes:
+      - Strategy selection with automatic default parameter resolution.
+      - **Data mode** toggle (Use existing coverage vs Fetch fresh data).
+      - Coverage ID drop-down and its relationship to Data → Coverage Summary.
+      - Fresh-data path that triggers `POST /api/data/fetch` before running.
+      - The updated behaviour of `POST /api/backtests`.
+    - Recent Backtests table:
+      - Describes the selection checkboxes, “Select page” and “Delete selected” actions, and pagination controls.
+    - Backtest Details:
+      - Documents the Price & Trades chart (candles, volume, trade markers, equity + projection).
+      - Explains the trades table, CSV export, and the Backtest Settings modal (tabs and what each controls).
+
+### S08_G01_TB002 – Regression tests for backtest settings API
+
+- Extended `backend/tests/test_backtests_api.py` to exercise the new settings endpoint:
+  - After creating a backtest via `POST /api/backtests`, the test now:
+    - Calls `PATCH /api/backtests/{id}/settings` with sample `label`, `notes`, `risk_config`, `costs_config`, and `visual_config`.
+    - Asserts that the returned `BacktestRead` reflects the updated fields.
+    - Confirms that a subsequent `GET /api/backtests/{id}` returns the same values.
+- This acts as a regression guard around:
+  - The `BacktestSettingsUpdate` schema.
+  - The alias mapping from `*_config_json` columns to `risk_config`, `costs_config`, and `visual_config` in `BacktestRead`.
+
+### S08_G01_TB003 – Pytest/markers and lint polish
+
+- Introduced a root-level `pytest.ini` to register the `integration` marker:
+  - Eliminates `PytestUnknownMarkWarning` for `@pytest.mark.integration` in live-provider tests.
+- Cleaned up Ruff line-length warnings for new backtest settings fields by wrapping long description strings in `backend/app/schemas.py` and `backend/app/schemas_backtest_settings.py`.
+
+Sprint workbook updates for S08:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` should mark:
+  - `S08_G01_TB001` – Backtests section in the user manual updated for coverage IDs, Run Backtest flow, Backtest Detail chart, and settings.
+  - `S08_G01_TB002` – Regression tests added for `PATCH /api/backtests/{id}/settings`.
+  - `S08_G01_TB003` – Test/marker and lint polish (pytest integration mark, Ruff clean-up).
+  All three tasks are now `implemented`.

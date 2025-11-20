@@ -13,6 +13,7 @@ venv/
 env/
 .env
 *.env
+.venv_xlsx/
 
 # SQLite databases
 *.db

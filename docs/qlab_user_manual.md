@@ -88,18 +88,19 @@ Right-hand card in the top row: **Coverage Summary**
 
 This table shows what’s currently stored in `sigmaqlab_prices.db`:
 
+- **ID** – a stable coverage identifier of the form `SYMBOL_EXCHANGE_SOURCE_00000`. This is what the Backtests page uses when you select “Use existing coverage”.
 - **Symbol** – logical symbol you used when fetching (e.g. `HDFCBANK`).
 - **Exchange** – whatever you supplied in the fetch form (`NSE`, `BSE`, etc.).
 - **Timeframe** – `1m`, `5m`, `1h`, `1d`, etc.
 - **Source** – where the data came from (`kite`, `yfinance`, `local_csv`, etc.).
-- **Start** – earliest timestamp we have for this `(symbol, exchange, timeframe)`.
+- **Start** – earliest timestamp we have for this `(symbol, exchange, timeframe, source)`.
 - **End** – latest timestamp.
 - **Bars** – total number of bars in that coverage window.
 
 How it’s populated:
 
 - The frontend calls `GET /api/data/summary` on load and after each fetch.
-- The backend groups `price_bars` by `(symbol, exchange, timeframe)` and computes min/max timestamp and count.
+- The backend groups `price_bars` by `(symbol, exchange, timeframe, source)` and computes min/max timestamp and count, then attaches a synthetic `coverage_id` for each group.
 
 Selection controls:
 
@@ -319,24 +320,23 @@ Controls:
 - **Strategy**
   - Drop-down populated from `GET /api/strategies`.
   - Items shown as `CODE – Name` (e.g. `SMA_X_API – SMA API Test`).
-  - Choosing a strategy drives which parameter sets appear in the next field.
+  - When you pick a strategy, the backend automatically chooses its default parameter set (e.g. `api_default`) for the run.
 
-- **Parameter set (optional)**
-  - Drop-down populated via `GET /api/strategies/{strategy_id}/params`.
-  - Includes a `None` option (no saved parameter set).
-  - When selected, the corresponding parameters are used as the base configuration for the strategy.
+- **Data mode**
+  - `Use existing coverage` – run against OHLC data already stored in the DB, identified by a coverage ID from the Data page.
+  - `Fetch fresh data` – fetch new OHLC data just for this run, then store it for reuse.
 
-- **Symbol**
-  - The symbol the backtest will trade, e.g. `HDFCBANK`, `TESTBT`.
-  - Must match the symbol you used when fetching data (for the same timeframe).
+- **Coverage ID** (when *Use existing coverage* is selected)
+  - Drop-down listing coverage IDs from **Coverage Summary**, e.g. `HDFCBANK_NSE_kite_00000`.
+  - Each entry shows `ID – SYMBOL TIMEFRAME SOURCE`.
+  - When you pick one, the form derives symbol, timeframe, date range, and source from that coverage and uses them for the backtest.
 
-- **Timeframe**
-  - Choice of `1m`, `5m`, `15m`, `1h`, `1d`.
-  - Must match the timeframe of the stored data you want to backtest.
-
-- **Start date / End date**
-  - Date pickers specifying the period of the backtest.
-  - The engine will load bars from `sigmaqlab_prices.db` with timestamps between these dates (inclusive).
+- **Symbol / Exchange / Interval / Dates** (when *Fetch fresh data* is selected)
+  - **Symbol** – e.g. `HDFCBANK`.
+  - **Exchange** – `NSE`, `BSE`, `US`, `CRYPTO`.
+  - **Interval** – `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `1d` (same values as Data → Timeframe).
+  - **Start date / End date** – same semantics as the Data page; defines the bar window.
+  - Before running the backtest, the backend calls `POST /api/data/fetch` with these values so the prices DB is up to date.
 
 - **Initial capital**
   - Starting cash in the backtest (e.g. `100000`).
@@ -344,33 +344,32 @@ Controls:
 
 - **Price source label**
   - Drop-down: `prices_db`, `kite`, `yfinance`, `synthetic`, `csv`, etc.
-  - This does **not** change where data is loaded from (it always comes from `sigmaqlab_prices.db`); it is purely a metadata tag stored as `data_source` in the Backtest record so you know which upstream source you used when the data was fetched.
+  - This is metadata only, stored as `data_source` on the Backtest row to remind you which upstream source you used when you fetched data.
 
 - **Override params JSON (optional)**
   - Multi-line JSON text area.
-  - When provided, these key/value pairs are merged **on top of**:
-    1. The selected parameter set’s JSON (if `Parameter set` is chosen), then
-    2. The inline overrides you type here.
-  - Example: if the parameter set is `{"fast": 10, "slow": 30}` and you override with `{"slow": 20}`, the effective params will be `{"fast": 10, "slow": 20}`.
+  - When provided, these key/value pairs are merged **on top of** the selected strategy’s default parameter set.
+  - Example: if the default params are `{"fast": 5, "slow": 20}` and you override with `{"slow": 30}`, the effective params will be `{"fast": 5, "slow": 30}`.
 
 What happens when you click **Run backtest**:
 
-1. The frontend constructs a payload and calls `POST /api/backtests`:
-   - Includes `strategy_id`, optional `params_id`, symbol, timeframe, start/end dates, initial capital, optional `params` (overrides), and `price_source` label.
-2. Backend `BacktestService`:
-   - Loads the `Strategy` from `sigmaqlab_meta.db` (checks for a known `code` in the engine registry).
-   - Loads `StrategyParameter` (if `params_id` is provided) and merges JSON parameters.
-   - Loads OHLCV bars for `(symbol, timeframe, start, end)` from `sigmaqlab_prices.db`.
-   - Runs the Backtrader engine (`SmaCrossStrategy` for `SMA_X` / its variants).
-   - Persists a `Backtest` row with basic metrics (`final_value`, `pnl`, etc.) and status `completed`.
-3. The API returns the created Backtest record.
-4. The frontend:
-   - Shows a short summary message (ID, PnL, final value).
+1. If **Fetch fresh data** is selected:
+   - The frontend first calls `POST /api/data/fetch` with your symbol/exchange/interval/date range, then reloads `GET /api/data/summary`.
+2. The frontend constructs a payload and calls `POST /api/backtests`:
+   - Includes `strategy_id`, default `params_id`, effective symbol/timeframe/start/end, initial capital, optional `params` (overrides), and `price_source` label.
+3. Backend `BacktestService`:
+   - Loads the `Strategy` from `sigmaqlab_meta.db` and resolves the engine implementation.
+   - Loads the chosen parameter set and merges JSON parameters + overrides.
+   - Loads OHLCV bars from `sigmaqlab_prices.db` for the derived symbol/timeframe/date window.
+   - Runs the Backtrader engine and persists a `Backtest` row with metrics, configs, and status `completed`.
+4. The API returns the created Backtest record.
+5. The frontend:
+   - Shows a summary message (ID, PnL, final value).
    - Adds the new backtest to the top of the **Recent Backtests** table.
 
 Error scenarios:
 
-- No price data in the DB for the chosen symbol/timeframe/date window → HTTP 400 with a clear message.
+- No price data in the DB for the given symbol/timeframe/date window → HTTP 400 with a clear message.
 - Invalid or unknown strategy code (not in engine registry) → HTTP 400.
 - Backtrader not installed in the backend environment → HTTP 500 with an explicit message.
 
@@ -382,61 +381,100 @@ Populated by `GET /api/backtests` on page load and updated when new runs complet
 
 Columns:
 
+- **(Checkbox)** – per-row selection for bulk delete.
 - **ID** – primary key of the `backtests` record.
 - **Strategy** – derived from `strategy_id` by looking up the current strategies (`CODE – Name`).
 - **Symbol(s)** – shows:
   - Just the symbol when there is one (e.g. `TESTBT`).
-  - `SYMBOL +N` when there are more (multi-symbol runs will be supported later).
+  - `SYMBOL +N` when there are more (multi-symbol runs in future).
 - **Timeframe** – `1d`, etc.
 - **Status** – backend status (`completed` today; future: `pending`, `failed`, etc.).
 - **PnL** – taken from `metrics.pnl` if present, rendered with sign and two decimals (e.g. `+1000.00`).
 - **Final value** – taken from `metrics.final_value` if present (final account value).
-- **Created** – timestamp of when the Backtest row was created, formatted via `toLocaleString`.
+- **Created** – timestamp of when the Backtest row was created, formatted in IST.
+
+Toolbar controls:
+
+- **Select page** – selects all rows on the current page.
+- **Delete selected** – deletes all selected backtests (with a confirmation dialog).
+- Pagination controls: `<<`, `<`, page size, `>`, `>>` let you navigate through your history.
 
 Usage tips:
 
 - This table is your quick “audit log” of what you’ve run recently.
-- You can run multiple parameter sets or date ranges and compare PnL and final value side by side.
-- In later sprints, dedicated detail views (equity curve, trades, etc.) will hang off each backtest ID.
+- Delete old or experimental runs to keep the list manageable; this also cleans up their equity/trade rows.
+
+### 3.3 Backtest Details – chart, trades, settings
+
+Below the main grid: **Backtest Details – #ID**.
+
+Summary column:
+
+- Shows core metadata and metrics for the selected backtest:
+  - Strategy name/code.
+  - Symbols, timeframe, status.
+  - Initial capital, final value, PnL, total return, max drawdown.
+  - Trade count, win rate, average win/loss.
+  - Parameters JSON for the parameter set used.
+- A **Settings** button opens a modal for per-backtest settings (see below).
+
+Price & Trades chart:
+
+- Uses the same `lightweight-charts` theme as the Data preview.
+- Upper pane:
+  - Candlestick price chart with volume histogram at the bottom (toggleable).
+  - Trade markers:
+    - Entry (`E`) and exit (`X`) markers at the appropriate bars, coloured by side (long/short).
+- Lower pane:
+  - Realised equity curve for the backtest.
+  - Optional “projection” curve showing what equity would look like if trades were held from entry until each bar (unrealised potential).
+- Panning/zooming and the time scale are synchronised between panes.
+
+Trades section:
+
+- **Export CSV** button:
+  - Opens `/api/backtests/{id}/trades/export`, which downloads all trades as CSV with PnL and what-if fields.
+- **Show trades table / Hide trades table** toggles a detailed table of executed trades:
+  - Columns include:
+    - ID, Symbol, Side, Size.
+    - Entry/Exit timestamps and prices.
+    - PnL and PnL %.
+    - Equity at exit (funds balance).
+    - What-if PnL, capture %, and cumulative PnL across trades.
+
+Backtest Settings modal:
+
+- Opened via the **Settings** button in the Backtest Details header.
+- Tabs:
+  - **Inputs** – read-only view of the parameter set used for this run.
+  - **Risk** – metadata for risk assumptions:
+    - Max position size %, per-trade risk %, default stop-loss / take-profit, allow short selling.
+  - **Costs** – metadata for commissions, slippage, and other charges.
+  - **Visualization** – toggles for:
+    - Show trade markers.
+    - Show projection curve.
+    - Show volume histogram.
+  - **Meta / Notes** – editable label and free-form notes for this backtest.
+- When you click **Save**:
+  - The modal calls `PATCH /api/backtests/{id}/settings`.
+  - Updated settings are persisted on the Backtest record and immediately reflected in the chart and details panel.
+
+> Note: Risk and cost settings are currently stored as metadata and used for analysis/documentation; the engine math itself still uses the simpler commission/slippage assumptions defined in the Backtest Overhaul backend. Future sprints can wire these fields directly into the engine.
 
 ---
 
 ## 4. Putting it all together (example)
 
-Here is a small concrete example you can replicate:
+One practical way to use the system now:
 
-1. **Load test data**
-   - Go to **Data**.
-   - Symbol: `TESTBT`
-   - Timeframe: `1d`
-   - Exchange: `NSE`
-   - Source: `yfinance` (or `kite`, if configured)
-   - Start date / End date: choose a 1–2 month window.
-   - Click **Fetch** and confirm `bars_written > 0` and you see `TESTBT` in Coverage Summary.
-
-2. **Create strategy + params**
-   - Go to **Strategies**.
-   - New Strategy:
-     - Name: `SMA API Test`
-     - Code: `SMA_X_API`
-     - Category: `trend`
-   - In Strategy Details → Parameter sets:
-     - Add parameter set:
-       - Label: `api_default`
-       - Params JSON: `{"fast": 5, "slow": 20}`
-       - Notes: `Basic SMA cross.`
-
-3. **Run backtest**
-   - Go to **Backtests**.
-   - Strategy: `SMA_X_API – SMA API Test`.
-   - Parameter set: `api_default`.
-   - Symbol: `TESTBT`.
-   - Timeframe: `1d`.
-   - Start date / End date: same range as your fetched data.
-   - Initial capital: `100000`.
-   - Price source label: `prices_db`.
-   - Override params JSON: leave empty (or tweak e.g. `{"slow": 30}`).
-   - Click **Run backtest**.
-   - Check the right-hand **Recent Backtests** table for a new row with `status=completed` and PnL / final value.
-
-This flow exercises **all three** areas of the app and matches the screenshot you shared. As the platform grows (portfolio-aware backtests, optimization, etc.), these three pages will remain the core building blocks.
+1. **Load data on the Data page** for `HDFCBANK` (or another symbol) and confirm you see a coverage row with a clear coverage ID.
+2. **Create or reuse a strategy** in the Strategies page and make sure it has a default parameter set (e.g. `api_default`).
+3. **On Backtests → Run Backtest**:
+   - Strategy: pick your strategy.
+   - Data mode: “Use existing coverage”.
+   - Coverage ID: pick the ID you just created on the Data page.
+   - Initial capital: choose a value (e.g. `100000`), set any override params if needed, and run.
+4. Inspect the **Recent Backtests** table, open **Backtest Details**, and:
+   - Use the chart to see entries/exits, equity, and projection.
+   - Export the trades CSV if you want to analyse in Excel.
+   - Use the **Settings** modal to document risk assumptions and favourite visual toggles for this run.
