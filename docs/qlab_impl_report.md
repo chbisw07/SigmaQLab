@@ -717,13 +717,16 @@ Notes:
   - The Data page (`frontend/src/pages/DataPage.tsx`) now:
     - Computes a rich set of indicators (SMA/EMA/WMA/HMA, Bollinger Bands, Donchian Channels, RSI, MACD, Momentum, ROC, CCI, OBV, ATR) in a `useEffect` over preview data.
     - Exposes grouped indicator toggles in a compact toolbar above the chart.
-    - Allocates a tall, Moneycontrol-style chart area (≈480–640px height, user-adjustable via slider) with:
+    - Allocates a tall, Moneycontrol-style chart area (≈512–1080px height, user-adjustable via slider) with:
       - Main pane: candlesticks + overlay indicators.
       - Optional volume histogram with up/down colouring (toggleable via a `Volume bars` checkbox).
       - Optional oscillator pane: stacked below for RSI/MACD-style indicators.
-  - The layout ensures:
-    - The chart is full-width, visually central, and easy to read.
-    - Indicator controls no longer steal vertical space from the chart itself.
+  - Additional UX refinements:
+    - Range presets in the preview header (`All`, intraday-style `1m`–`60m`, `1d`, `1w`, and calendar-style `1M`, `3M`, `6M`, `1Y`) that zoom the chart based on the latest bar.
+    - Simple “tools” toggles:
+      - Last price reference line (dashed).
+      - Highlight marker on the latest bar.
+    - Price and oscillator panes keep their time scales synchronized when panning/zooming, so momentum/volume indicators always line up with the candles.
 
 ### Tests for S02/G02
 

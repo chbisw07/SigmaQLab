@@ -140,6 +140,21 @@ Details:
 - Each bar includes `timestamp`, `open`, `high`, `low`, `close`, `volume`, and `source`.
 - The chart uses a tall, Moneycontrol-style layout so you can clearly see price swings and indicator behaviour.
 
+Range shortcuts:
+
+- In the Preview header you can quickly change the visible range without refetching data:
+  - Intraday-style ranges: `1m`, `3m`, `5m`, `10m`, `30m`, `60m`, `1d`, `1w`.
+  - Calendar-style ranges: `1M`, `3M`, `6M`, `1Y`, or `All`.
+- These buttons adjust the chart’s time scale (zoom/pan) based on the last bar’s timestamp.
+
+Tools and synchronisation:
+
+- In the Indicators area there are two simple “tools”:
+  - **Last price line** – draws a dashed reference line at the most recent price.
+  - **Highlight latest bar** – adds a marker above the most recent candle.
+- When oscillators are enabled, the price and oscillator charts stay time-synchronised:
+  - Panning/zooming either pane keeps the other in the same time window.
+
 Use this to sanity-check:
 
 - That data looks continuous and sensible (no obvious bad spikes from CSV or provider glitches).

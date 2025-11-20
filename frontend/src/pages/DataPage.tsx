@@ -65,6 +65,21 @@ type PreviewWithIndicators = PriceBarPreview & {
 
 type FetchState = "idle" | "loading" | "success" | "error";
 
+type PreviewRangePreset =
+  | "all"
+  | "1m"
+  | "3m"
+  | "5m"
+  | "10m"
+  | "30m"
+  | "60m"
+  | "1d"
+  | "1w"
+  | "1M"
+  | "3M"
+  | "6M"
+  | "1Y";
+
 const API_BASE = "http://127.0.0.1:8000";
 
 export const DataPage = () => {
@@ -101,8 +116,12 @@ export const DataPage = () => {
     });
     return initial;
   });
-  const [chartHeight, setChartHeight] = useState(480);
+  const [chartHeight, setChartHeight] = useState(640);
   const [showVolume, setShowVolume] = useState(true);
+  const [previewRange, setPreviewRange] =
+    useState<PreviewRangePreset>("all");
+  const [showLastPriceLine, setShowLastPriceLine] = useState(true);
+  const [highlightLatestBar, setHighlightLatestBar] = useState(false);
 
   useEffect(() => {
     const today = new Date();
@@ -810,12 +829,58 @@ export const DataPage = () => {
       <Box mt={3}>
         <Card>
           <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Preview{" "}
-              {selectedSymbol && selectedTimeframe
-                ? `${selectedSymbol} (${selectedTimeframe})`
-                : ""}
-            </Typography>
+            <Box
+              sx={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                mb: 1
+              }}
+            >
+              <Typography variant="h6">
+                Preview{" "}
+                {selectedSymbol && selectedTimeframe
+                  ? `${selectedSymbol} (${selectedTimeframe})`
+                  : ""}
+              </Typography>
+              {preview.length > 0 && (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <Typography variant="body2">Range:</Typography>
+                  <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                    {[
+                      { id: "all", label: "All" },
+                      { id: "1m", label: "1m" },
+                      { id: "3m", label: "3m" },
+                      { id: "5m", label: "5m" },
+                      { id: "10m", label: "10m" },
+                      { id: "30m", label: "30m" },
+                      { id: "60m", label: "60m" },
+                      { id: "1d", label: "1D" },
+                      { id: "1w", label: "1W" },
+                      { id: "1M", label: "1M" },
+                      { id: "3M", label: "3M" },
+                      { id: "6M", label: "6M" },
+                      { id: "1Y", label: "1Y" }
+                    ].map((opt) => (
+                      <Button
+                        key={opt.id}
+                        size="small"
+                        variant={
+                          previewRange === (opt.id as PreviewRangePreset)
+                            ? "contained"
+                            : "outlined"
+                        }
+                        onClick={() =>
+                          setPreviewRange(opt.id as PreviewRangePreset)
+                        }
+                      >
+                        {opt.label}
+                      </Button>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+            </Box>
             {preview.length === 0 ? (
               <Typography variant="body2" color="textSecondary">
                 Select a row from the coverage table to preview price and volume
@@ -960,8 +1025,8 @@ export const DataPage = () => {
                     <Slider
                       size="small"
                       value={chartHeight}
-                      min={420}
-                      max={640}
+                      min={512}
+                      max={1080}
                       step={20}
                       valueLabelDisplay="auto"
                       onChange={(_, value) =>
@@ -969,6 +1034,35 @@ export const DataPage = () => {
                           Array.isArray(value) ? value[0] : (value as number)
                         )
                       }
+                    />
+                  </Box>
+                  <Box mt={2}>
+                    <Typography variant="body2" gutterBottom>
+                      Tools
+                    </Typography>
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={showLastPriceLine}
+                          onChange={(e) =>
+                            setShowLastPriceLine(e.target.checked)
+                          }
+                        />
+                      }
+                      label="Last price line"
+                    />
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={highlightLatestBar}
+                          onChange={(e) =>
+                            setHighlightLatestBar(e.target.checked)
+                          }
+                        />
+                      }
+                      label="Highlight latest bar"
                     />
                   </Box>
                 </Box>
@@ -987,6 +1081,9 @@ export const DataPage = () => {
                     selectedIndicatorIds={Array.from(selectedIndicatorIds)}
                     height={chartHeight}
                     showVolume={showVolume}
+                    rangePreset={previewRange}
+                    showLastPriceLine={showLastPriceLine}
+                    highlightLatestBar={highlightLatestBar}
                   />
                 </Box>
               </>
