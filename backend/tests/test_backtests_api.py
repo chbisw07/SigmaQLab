@@ -125,5 +125,19 @@ def test_create_backtest_via_api() -> None:
     assert export_resp.status_code == 200
     assert "text/csv" in export_resp.headers.get("content-type", "")
 
+    # Delete the backtest and ensure it no longer appears.
+    delete_resp = client.delete(f"/api/backtests/{backtest['id']}")
+    assert delete_resp.status_code == 204
+
+    # Detail should now 404.
+    detail_after_delete = client.get(f"/api/backtests/{backtest['id']}")
+    assert detail_after_delete.status_code == 404
+
+    # List endpoint should no longer include the deleted backtest.
+    list_resp_after_delete = client.get("/api/backtests")
+    assert list_resp_after_delete.status_code == 200
+    items_after = list_resp_after_delete.json()
+    assert all(item["id"] != backtest["id"] for item in items_after)
+
     meta_session.close()
     prices_session.close()

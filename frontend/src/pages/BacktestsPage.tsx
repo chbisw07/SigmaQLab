@@ -13,16 +13,8 @@ import {
   TextField,
   Typography
 } from "@mui/material";
-import {
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  CartesianGrid
-} from "recharts";
 import { FormEvent, useEffect, useState } from "react";
+import { BacktestDetailChart } from "../features/backtests/components/BacktestDetailChart";
 
 type Strategy = {
   id: number;
@@ -75,6 +67,35 @@ type Trade = {
   exit_timestamp: string;
   exit_price: number;
   pnl: number;
+  pnl_pct?: number | null;
+  holding_period_bars?: number | null;
+  max_theoretical_pnl?: number | null;
+  max_theoretical_pnl_pct?: number | null;
+  pnl_capture_ratio?: number | null;
+};
+
+type BacktestChartPriceBar = {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number | null;
+};
+
+type BacktestChartData = {
+  backtest: Backtest;
+  price_bars: BacktestChartPriceBar[];
+  indicators: Record<string, { timestamp: string; value: number }[]>;
+  equity_curve: EquityPoint[];
+  projection_curve: EquityPoint[];
+  trades: (Trade & {
+    pnl_pct?: number | null;
+    holding_period_bars?: number | null;
+    max_theoretical_pnl?: number | null;
+    max_theoretical_pnl_pct?: number | null;
+    pnl_capture_ratio?: number | null;
+  })[];
 };
 
 type StrategyParameterDetail = {
@@ -121,6 +142,8 @@ export const BacktestsPage = () => {
   const [paramDetail, setParamDetail] = useState<StrategyParameterDetail | null>(
     null
   );
+  const [priceBars, setPriceBars] = useState<BacktestChartPriceBar[]>([]);
+  const [projection, setProjection] = useState<EquityPoint[]>([]);
   const [detailState, setDetailState] = useState<FetchState>("idle");
   const [detailError, setDetailError] = useState<string | null>(null);
 
@@ -330,26 +353,15 @@ export const BacktestsPage = () => {
     setParamDetail(null);
 
     try {
-      const equityPromise = fetch(
-        `${API_BASE}/api/backtests/${backtest.id}/equity`
+      const chartRes = await fetch(
+        `${API_BASE}/api/backtests/${backtest.id}/chart-data`
       );
-      const tradesPromise = fetch(
-        `${API_BASE}/api/backtests/${backtest.id}/trades`
-      );
-
-      const [equityRes, tradesRes] = await Promise.all([
-        equityPromise,
-        tradesPromise
-      ]);
-
-      if (equityRes.ok) {
-        const eqData: EquityPoint[] = await equityRes.json();
-        setEquity(eqData);
-      }
-
-      if (tradesRes.ok) {
-        const trData: Trade[] = await tradesRes.json();
-        setTrades(trData);
+      if (chartRes.ok) {
+        const chart: BacktestChartData = await chartRes.json();
+        setPriceBars(chart.price_bars);
+        setEquity(chart.equity_curve);
+        setProjection(chart.projection_curve);
+        setTrades(chart.trades);
       }
 
       if (backtest.params_id != null) {
@@ -381,31 +393,80 @@ export const BacktestsPage = () => {
     return value.toFixed(2);
   };
 
+  const [selectedBacktestIds, setSelectedBacktestIds] = useState<Set<number>>(
+    () => new Set()
+  );
+
+  const handleToggleBacktestSelection = (id: number) => {
+    setSelectedBacktestIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllBacktestsOnPage = () => {
+    const idsOnPage = pagedBacktests.map((b) => b.id);
+    setSelectedBacktestIds((prev) => {
+      const next = new Set(prev);
+      idsOnPage.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
+  const handleDeleteSelectedBacktests = async () => {
+    if (selectedBacktestIds.size === 0) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete ${selectedBacktestIds.size} backtest(s)? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    const ids = Array.from(selectedBacktestIds);
+    for (const id of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      const resp = await fetch(`${API_BASE}/api/backtests/${id}`, {
+        method: "DELETE"
+      });
+      if (!resp.ok && resp.status !== 404) {
+        // Stop on first unexpected error.
+        // eslint-disable-next-line no-alert
+        window.alert(`Failed to delete backtest ${id}: HTTP ${resp.status}`);
+        break;
+      }
+    }
+
+    setBacktests((prev) => prev.filter((b) => !selectedBacktestIds.has(b.id)));
+    setSelectedBacktestIds(new Set());
+    if (selectedBacktest && selectedBacktestIds.has(selectedBacktest.id)) {
+      setSelectedBacktestId(null);
+      setSelectedBacktest(null);
+    }
+  };
+
   const tradesWithCumulative = (() => {
     let cum = 0;
+    const equityByTimestamp: Record<string, number> = {};
+    equity.forEach((pt) => {
+      equityByTimestamp[pt.timestamp] = pt.equity;
+    });
     return trades.map((t) => {
       cum += t.pnl;
-      return { ...t, cum_pnl: cum };
+      return {
+        ...t,
+        cum_pnl: cum,
+        equity_at_exit: equityByTimestamp[t.exit_timestamp]
+      };
     });
   })();
-
-  const tradeExitByTimestamp: Record<string, number> = {};
-  trades.forEach((t) => {
-    tradeExitByTimestamp[t.exit_timestamp] = t.pnl;
-  });
-
-  const equityWithDelta = equity.map((pt, idx) => {
-    const prevEquity = idx === 0 ? pt.equity : equity[idx - 1].equity;
-    const delta = pt.equity - prevEquity;
-    const deltaPct = prevEquity !== 0 ? (delta / prevEquity) * 100 : 0;
-    const tradePnl = tradeExitByTimestamp[pt.timestamp];
-    return {
-      ...pt,
-      delta,
-      deltaPct,
-      tradePnl
-    };
-  });
 
   return (
     <Box>
@@ -612,6 +673,22 @@ export const BacktestsPage = () => {
                     <Button
                       size="small"
                       variant="outlined"
+                      onClick={handleSelectAllBacktestsOnPage}
+                    >
+                      Select page
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      disabled={selectedBacktestIds.size === 0}
+                      onClick={handleDeleteSelectedBacktests}
+                    >
+                      Delete selected
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
                       onClick={() => setPage(0)}
                       disabled={page === 0}
                     >
@@ -669,6 +746,7 @@ export const BacktestsPage = () => {
                   <Table size="small">
                     <TableHead>
                       <TableRow>
+                        <TableCell />
                         <TableCell>ID</TableCell>
                         <TableCell>Strategy</TableCell>
                         <TableCell>Symbol(s)</TableCell>
@@ -688,6 +766,16 @@ export const BacktestsPage = () => {
                           onClick={() => handleSelectBacktest(b)}
                           sx={{ cursor: "pointer" }}
                         >
+                          <TableCell padding="checkbox">
+                            <input
+                              type="checkbox"
+                              checked={selectedBacktestIds.has(b.id)}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                handleToggleBacktestSelection(b.id);
+                              }}
+                            />
+                          </TableCell>
                           <TableCell>{b.id}</TableCell>
                           <TableCell>
                             {getStrategyLabel(b.strategy_id)}
@@ -800,76 +888,21 @@ export const BacktestsPage = () => {
 
                 <Grid item xs={12} md={8}>
                   <Typography variant="subtitle2" gutterBottom>
-                    Equity Curve (net return %)
+                    Price & Trades
                   </Typography>
-                  {equity.length === 0 ? (
+                  {priceBars.length === 0 ? (
                     <Typography variant="body2" color="textSecondary">
-                      No equity data available for this backtest.
+                      No chart data available for this backtest.
                     </Typography>
                   ) : (
-                    <Box sx={{ height: 260 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart
-                          data={equityWithDelta.map((pt) => {
-                            const init =
-                              typeof selectedBacktest.metrics.initial_capital ===
-                                "number" &&
-                              selectedBacktest.metrics.initial_capital > 0
-                                ? selectedBacktest.metrics.initial_capital
-                                : selectedBacktest.initial_capital;
-                            const pct =
-                              init > 0 ? (pt.equity / init - 1) * 100 : 0;
-                            return {
-                              ...pt,
-                              equity_pct: pct
-                            };
-                          })}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="timestamp" tick={false} />
-                          <YAxis
-                            tickFormatter={(v) =>
-                              `${(v as number).toFixed(2)}%`
-                            }
-                            domain={["auto", "auto"]}
-                          />
-                          <Tooltip
-                            labelFormatter={(value) =>
-                              new Date(value as string).toLocaleString()
-                            }
-                            formatter={(value: number) =>
-                              [`${value.toFixed(2)}%`, "Equity"]
-                            }
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="equity_pct"
-                            stroke="#90caf9"
-                            dot={(props) => {
-                              const { cx, cy, payload } = props as {
-                                cx: number;
-                                cy: number;
-                                payload: { tradePnl?: number };
-                              };
-                              const pnl = payload.tradePnl;
-                              if (pnl === undefined) {
-                                return null;
-                              }
-                              const fill = pnl >= 0 ? "#4caf50" : "#ef5350";
-                              return (
-                                <circle
-                                  cx={cx}
-                                  cy={cy}
-                                  r={4}
-                                  fill={fill}
-                                  stroke="#000"
-                                  strokeWidth={1}
-                                />
-                              );
-                            }}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
+                    <Box sx={{ height: 380 }}>
+                      <BacktestDetailChart
+                        priceBars={priceBars}
+                        equityCurve={equity}
+                        projectionCurve={projection}
+                        trades={trades}
+                        height={360}
+                      />
                     </Box>
                   )}
 
@@ -877,6 +910,21 @@ export const BacktestsPage = () => {
                     <Typography variant="subtitle2" gutterBottom>
                       Trades
                     </Typography>
+                    <Box mb={1}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          if (!selectedBacktest) return;
+                          window.open(
+                            `${API_BASE}/api/backtests/${selectedBacktest.id}/trades/export`,
+                            "_blank"
+                          );
+                        }}
+                      >
+                        Export CSV
+                      </Button>
+                    </Box>
                     {trades.length === 0 ? (
                       <Typography variant="body2" color="textSecondary">
                         No trades recorded for this backtest.
@@ -894,6 +942,10 @@ export const BacktestsPage = () => {
                             <TableCell>Exit</TableCell>
                             <TableCell align="right">Exit price</TableCell>
                             <TableCell align="right">PnL</TableCell>
+                            <TableCell align="right">PnL %</TableCell>
+                            <TableCell align="right">Equity</TableCell>
+                            <TableCell align="right">What-if PnL</TableCell>
+                            <TableCell align="right">Capture</TableCell>
                             <TableCell align="right">Cum PnL</TableCell>
                           </TableRow>
                         </TableHead>
@@ -922,6 +974,26 @@ export const BacktestsPage = () => {
                                 {t.pnl.toFixed(2)}
                               </TableCell>
                               <TableCell align="right">
+                                {typeof t.pnl_pct === "number"
+                                  ? (t.pnl_pct * 100).toFixed(2)
+                                  : ""}
+                              </TableCell>
+                              <TableCell align="right">
+                                {typeof t.equity_at_exit === "number"
+                                  ? t.equity_at_exit.toFixed(2)
+                                  : ""}
+                              </TableCell>
+                              <TableCell align="right">
+                                {typeof t.max_theoretical_pnl === "number"
+                                  ? t.max_theoretical_pnl.toFixed(2)
+                                  : ""}
+                              </TableCell>
+                              <TableCell align="right">
+                                {typeof t.pnl_capture_ratio === "number"
+                                  ? (t.pnl_capture_ratio * 100).toFixed(2)
+                                  : ""}
+                              </TableCell>
+                              <TableCell align="right">
                                 {t.cum_pnl.toFixed(2)}
                               </TableCell>
                             </TableRow>
@@ -935,46 +1007,10 @@ export const BacktestsPage = () => {
                     <Typography variant="subtitle2" gutterBottom>
                       Equity Data (last 50 bars)
                     </Typography>
-                    {equityWithDelta.length === 0 ? (
-                      <Typography variant="body2" color="textSecondary">
-                        No equity data available.
-                      </Typography>
-                    ) : (
-                      <Table size="small">
-                        <TableHead>
-                          <TableRow>
-                            <TableCell>Time</TableCell>
-                            <TableCell align="right">Equity</TableCell>
-                            <TableCell align="right">Δ Equity</TableCell>
-                            <TableCell align="right">Δ %</TableCell>
-                            <TableCell align="right">Trade PnL</TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {equityWithDelta.slice(-50).map((pt) => (
-                            <TableRow key={pt.timestamp}>
-                              <TableCell>
-                                {formatDateTime(pt.timestamp)}
-                              </TableCell>
-                              <TableCell align="right">
-                                {pt.equity.toFixed(2)}
-                              </TableCell>
-                              <TableCell align="right">
-                                {pt.delta.toFixed(2)}
-                              </TableCell>
-                              <TableCell align="right">
-                                {pt.deltaPct.toFixed(2)}%
-                              </TableCell>
-                              <TableCell align="right">
-                                {pt.tradePnl !== undefined
-                                  ? pt.tradePnl.toFixed(2)
-                                  : ""}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    )}
+                    <Typography variant="body2" color="textSecondary">
+                      Equity data table removed; use the chart and trades table
+                      above to inspect performance.
+                    </Typography>
                   </Box>
                 </Grid>
               </Grid>

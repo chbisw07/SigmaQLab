@@ -318,3 +318,26 @@ async def export_backtest_trades_csv(
         media_type="text/csv",
         headers=headers,
     )
+
+
+@router.delete("/{backtest_id}", status_code=204)
+async def delete_backtest(
+    backtest_id: int,
+    meta_db: Session = Depends(get_db),
+) -> Response:
+    """Delete a backtest and its associated trades/equity points."""
+
+    backtest = _get_backtest_or_404(meta_db, backtest_id)
+
+    # Remove child rows first to avoid foreign key issues.
+    meta_db.query(BacktestEquityPoint).filter(
+        BacktestEquityPoint.backtest_id == backtest.id
+    ).delete(synchronize_session=False)
+    meta_db.query(BacktestTrade).filter(
+        BacktestTrade.backtest_id == backtest.id
+    ).delete(synchronize_session=False)
+
+    meta_db.delete(backtest)
+    meta_db.commit()
+
+    return Response(status_code=204)

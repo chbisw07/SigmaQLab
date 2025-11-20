@@ -150,6 +150,23 @@ async def create_strategy_param(
 ) -> StrategyParameterRead:
     _ = _get_strategy_or_404(db, strategy_id)
 
+    # Enforce that each strategy has at most one parameter set per label
+    # (e.g. only one 'api_default' per strategy).
+    existing = (
+        db.query(StrategyParameter)
+        .filter(
+            StrategyParameter.strategy_id == strategy_id,
+            StrategyParameter.label == payload.label,
+        )
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Parameter label '{payload.label}' already exists for this " "strategy"
+            ),
+        )
     param = StrategyParameter(
         strategy_id=strategy_id,
         label=payload.label,
@@ -171,6 +188,16 @@ async def get_param(
     return StrategyParameterRead.model_validate(param)
 
 
+@router.get("/params", response_model=List[StrategyParameterRead])
+async def list_all_params(
+    db: Session = Depends(get_db),
+) -> List[StrategyParameterRead]:
+    """Return all strategy parameters (parameter registry)."""
+
+    params = db.query(StrategyParameter).order_by(StrategyParameter.label.asc()).all()
+    return [StrategyParameterRead.model_validate(p) for p in params]
+
+
 @router.put("/params/{param_id}", response_model=StrategyParameterRead)
 async def update_param(
     param_id: int,
@@ -179,6 +206,26 @@ async def update_param(
 ) -> StrategyParameterRead:
     param = _get_param_or_404(db, param_id)
     update_data = payload.model_dump(exclude_unset=True)
+
+    # If the label is being changed, enforce uniqueness per strategy.
+    new_label = update_data.get("label")
+    if new_label is not None and new_label != param.label:
+        existing = (
+            db.query(StrategyParameter)
+            .filter(
+                StrategyParameter.strategy_id == param.strategy_id,
+                StrategyParameter.label == new_label,
+                StrategyParameter.id != param.id,
+            )
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Parameter label '{new_label}' already exists for this strategy"
+                ),
+            )
 
     for field, value in update_data.items():
         if field == "params":
