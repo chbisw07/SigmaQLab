@@ -139,14 +139,33 @@ def test_backtest_service_persists_backtest_record() -> None:
     assert "final_value" in metrics
     assert "total_return" in metrics
     assert "max_drawdown" in metrics
+    # New risk metrics from Backtest Overhaul.
+    assert "volatility" in metrics
+    assert "sharpe" in metrics
+    assert "sortino" in metrics
+    assert "annual_return" in metrics
+    assert "calmar" in metrics
     assert backtest.status == "completed"
 
     # Equity curve and trades should also have been persisted.
     meta_session.refresh(backtest)
     assert backtest.equity_points  # type: ignore[attr-defined]
-    # For this simple SMA strategy we expect at least one trade, but not enforcing
-    # an exact count to keep the test robust to small engine changes.
-    assert backtest.trades is not None  # type: ignore[attr-defined]
+    # Equity curve and trades should also have been persisted.
+    trades = backtest.trades  # type: ignore[attr-defined]
+    assert trades is not None
+
+    # Per-trade derived metrics (what-if projections) should be present when
+    # at least one trade exists. Some synthetic paths may produce zero trades,
+    # so we guard the detailed checks accordingly.
+    if trades:
+        trade = trades[0]
+        assert trade.pnl is not None  # type: ignore[attr-defined]
+        # New optional columns should exist even if some values are None.
+        assert hasattr(trade, "pnl_pct")
+        assert hasattr(trade, "holding_period_bars")
+        assert hasattr(trade, "max_theoretical_pnl")
+        assert hasattr(trade, "max_theoretical_pnl_pct")
+        assert hasattr(trade, "pnl_capture_ratio")
 
     meta_session.close()
     prices_session.close()

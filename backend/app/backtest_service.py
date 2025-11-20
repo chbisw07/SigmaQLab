@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from math import sqrt
+from statistics import mean, pstdev
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -137,41 +139,13 @@ class BacktestService:
 
         # Derive richer metrics from equity curve and trades.
         metrics: Dict[str, float] = dict(result.metrics)
-        if result.equity_curve:
-            eq_values = [pt.equity for pt in result.equity_curve]
-            if eq_values:
-                start_equity = eq_values[0]
-                end_equity = eq_values[-1]
-                if start_equity > 0:
-                    metrics["total_return"] = (end_equity / start_equity) - 1.0
-
-                peak = eq_values[0]
-                max_dd = 0.0
-                for v in eq_values:
-                    if v > peak:
-                        peak = v
-                    if peak > 0:
-                        dd = (peak - v) / peak
-                        if dd > max_dd:
-                            max_dd = dd
-                metrics["max_drawdown"] = max_dd
-
-        if result.trades:
-            pnls = [t.pnl for t in result.trades if isinstance(t, TradeRecord)]
-            if pnls:
-                metrics["trade_count"] = float(len(pnls))
-                wins = [p for p in pnls if p > 0]
-                losses = [p for p in pnls if p < 0]
-                if wins:
-                    metrics["avg_win"] = sum(wins) / len(wins)
-                if losses:
-                    metrics["avg_loss"] = sum(losses) / len(losses)
-                if wins or losses:
-                    metrics["win_rate"] = (
-                        len(wins) / float(len(wins) + len(losses))
-                        if (len(wins) + len(losses)) > 0
-                        else 0.0
-                    )
+        metrics.update(
+            self._compute_equity_metrics(
+                result.equity_curve,
+                timeframe=timeframe,
+            )
+        )
+        metrics.update(self._compute_trade_metrics(result.trades))
 
         backtest = Backtest(
             strategy_id=strategy.id,
@@ -183,6 +157,10 @@ class BacktestService:
             end_date=end,
             initial_capital=initial_capital,
             starting_portfolio_json=None,
+            params_effective_json=resolved_params or None,
+            risk_config_json=None,
+            costs_config_json=None,
+            visual_config_json=None,
             status="completed",
             metrics_json=metrics,
             data_source=price_source,
@@ -204,28 +182,190 @@ class BacktestService:
             ]
             meta_db.add_all(equity_rows)
 
-        # Persist trades.
+        # Persist trades, including per-trade metrics derived from the price
+        # series (e.g. holding period and what-if projections).
         if isinstance(result.trades, list) and result.trades:
-            trade_rows: List[BacktestTrade] = [
-                BacktestTrade(
-                    backtest_id=backtest.id,
-                    symbol=trade.symbol or symbol,
-                    side=trade.side,
-                    size=trade.size,
-                    entry_timestamp=trade.entry_timestamp,
-                    entry_price=trade.entry_price,
-                    exit_timestamp=trade.exit_timestamp,
-                    exit_price=trade.exit_price,
-                    pnl=trade.pnl,
+            trade_rows: List[BacktestTrade] = []
+
+            closes = df["close"]
+            for trade in result.trades:
+                if not isinstance(trade, TradeRecord):
+                    continue
+
+                # Determine direction for projections.
+                direction = 1.0 if trade.side == "long" else -1.0
+
+                # Locate bars from entry onward.
+                mask_from_entry = closes.index >= trade.entry_timestamp
+                window_after_entry = closes[mask_from_entry]
+
+                # Holding-period mask up to the exit bar.
+                mask_holding = (closes.index >= trade.entry_timestamp) & (
+                    closes.index <= trade.exit_timestamp
                 )
-                for trade in result.trades
-                if isinstance(trade, TradeRecord)
-            ]
-            meta_db.add_all(trade_rows)
+                holding_window = closes[mask_holding]
+
+                holding_period_bars: int | None = None
+                if not holding_window.empty:
+                    holding_period_bars = int(len(holding_window))
+
+                notional = trade.entry_price * trade.size
+                pnl_pct: float | None = None
+                if notional > 0:
+                    pnl_pct = trade.pnl / notional
+
+                max_theoretical_pnl: float | None = None
+                max_theoretical_pnl_pct: float | None = None
+                pnl_capture_ratio: float | None = None
+
+                if not window_after_entry.empty and notional > 0:
+                    price_diff = window_after_entry - trade.entry_price
+                    projection = direction * price_diff * trade.size
+                    max_theoretical_pnl = float(projection.max())
+                    if max_theoretical_pnl != 0:
+                        max_theoretical_pnl_pct = max_theoretical_pnl / notional
+                        pnl_capture_ratio = trade.pnl / max_theoretical_pnl
+
+                trade_rows.append(
+                    BacktestTrade(
+                        backtest_id=backtest.id,
+                        symbol=trade.symbol or symbol,
+                        side=trade.side,
+                        size=trade.size,
+                        entry_timestamp=trade.entry_timestamp,
+                        entry_price=trade.entry_price,
+                        exit_timestamp=trade.exit_timestamp,
+                        exit_price=trade.exit_price,
+                        pnl=trade.pnl,
+                        pnl_pct=pnl_pct,
+                        holding_period_bars=holding_period_bars,
+                        max_theoretical_pnl=max_theoretical_pnl,
+                        max_theoretical_pnl_pct=max_theoretical_pnl_pct,
+                        pnl_capture_ratio=pnl_capture_ratio,
+                    )
+                )
+
+            if trade_rows:
+                meta_db.add_all(trade_rows)
 
         meta_db.commit()
 
         return backtest
+
+    def _compute_equity_metrics(
+        self,
+        equity_curve: List[EquityPoint] | None,
+        *,
+        timeframe: str,
+    ) -> Dict[str, float]:
+        """Compute risk/return metrics from an equity curve."""
+
+        # Always return a dictionary containing the expected keys so callers
+        # can rely on their presence even in edge cases with too few points.
+        metrics: Dict[str, float] = {
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "volatility": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "annual_return": 0.0,
+            "calmar": 0.0,
+        }
+
+        if not equity_curve:
+            return metrics
+
+        eq_values = [pt.equity for pt in equity_curve if pt.equity is not None]
+        if len(eq_values) < 2:
+            return metrics
+
+        start_equity = eq_values[0]
+        end_equity = eq_values[-1]
+        if start_equity > 0:
+            total_return = (end_equity / start_equity) - 1.0
+            metrics["total_return"] = total_return
+
+        # Max drawdown based on running peak.
+        peak = eq_values[0]
+        max_dd = 0.0
+        for v in eq_values:
+            if v > peak:
+                peak = v
+            if peak > 0:
+                dd = (peak - v) / peak
+                if dd > max_dd:
+                    max_dd = dd
+        metrics["max_drawdown"] = max_dd
+
+        # Per-bar returns for volatility/Sharpe/Sortino.
+        returns: List[float] = []
+        for prev, cur in zip(eq_values[:-1], eq_values[1:], strict=True):
+            if prev > 0:
+                returns.append((cur / prev) - 1.0)
+
+        if not returns:
+            return metrics
+
+        mean_r = mean(returns)
+        # Population standard deviation to avoid small-sample bias swings.
+        vol = pstdev(returns) if len(returns) > 1 else 0.0
+        metrics["volatility"] = vol
+
+        metrics["sharpe"] = mean_r / vol if vol > 0 else 0.0
+
+        downside = [min(r, 0.0) for r in returns]
+        if any(downside):
+            downside_var = mean(d * d for d in downside)
+            downside_dev = sqrt(downside_var)
+            if downside_dev > 0:
+                metrics["sortino"] = mean_r / downside_dev
+            else:
+                metrics["sortino"] = 0.0
+
+        # Simple annualisation for Calmar: assume ~252 trading days for 1d
+        # timeframe and scale proportionally for intraday bars.
+        minutes = _TIMEFRAME_MINUTES.get(timeframe.lower())
+        if minutes is not None and minutes > 0:
+            bars_per_day = (60 * 24) / minutes
+            days_per_year = 252.0
+            bars_per_year = bars_per_day * days_per_year
+            periods = float(len(returns))
+            if periods > 0 and start_equity > 0:
+                # Effective return per bar and annualised return.
+                r_per_bar = (end_equity / start_equity) ** (1.0 / periods) - 1.0
+                r_ann = (1.0 + r_per_bar) ** bars_per_year - 1.0
+                metrics["annual_return"] = r_ann
+                metrics["calmar"] = r_ann / max_dd if max_dd > 0 else 0.0
+
+        return metrics
+
+    def _compute_trade_metrics(
+        self,
+        trades: List[TradeRecord] | None,
+    ) -> Dict[str, float]:
+        """Compute aggregate trade-level metrics."""
+
+        if not trades:
+            return {}
+
+        pnls = [t.pnl for t in trades if isinstance(t, TradeRecord)]
+        if not pnls:
+            return {}
+
+        metrics: Dict[str, float] = {}
+        metrics["trade_count"] = float(len(pnls))
+
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+        if wins:
+            metrics["avg_win"] = sum(wins) / len(wins)
+        if losses:
+            metrics["avg_loss"] = sum(losses) / len(losses)
+        if wins or losses:
+            total = len(wins) + len(losses)
+            metrics["win_rate"] = len(wins) / float(total) if total > 0 else 0.0
+
+        return metrics
 
     def _aggregate_from_lower_timeframe(
         self,

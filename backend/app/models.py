@@ -62,12 +62,21 @@ class Backtest(Base):
     strategy_id = Column(Integer, ForeignKey("strategies.id"), nullable=False)
     params_id = Column(Integer, ForeignKey("strategy_parameters.id"), nullable=True)
     engine = Column(String, nullable=False, default="backtrader")
+    # Optional human-friendly label and notes for this run.
+    label = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
     symbols_json = Column(JSON, nullable=False)
     timeframe = Column(String, nullable=False)
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime, nullable=False)
     initial_capital = Column(Float, nullable=False)
     starting_portfolio_json = Column(JSON, nullable=True)
+    # Effective parameters and configuration used for this run. These are
+    # stored as JSON blobs so we can fully reconstruct the backtest context.
+    params_effective_json = Column(JSON, nullable=True)
+    risk_config_json = Column(JSON, nullable=True)
+    costs_config_json = Column(JSON, nullable=True)
+    visual_config_json = Column(JSON, nullable=True)
     status = Column(String, nullable=False, default="pending")
     metrics_json = Column(JSON, nullable=True)
     data_source = Column(String, nullable=True)
@@ -110,5 +119,11 @@ class BacktestTrade(Base):
     exit_timestamp = Column(DateTime, nullable=False)
     exit_price = Column(Float, nullable=False)
     pnl = Column(Float, nullable=False)
+    # Optional derived metrics per trade.
+    pnl_pct = Column(Float, nullable=True)
+    holding_period_bars = Column(Integer, nullable=True)
+    max_theoretical_pnl = Column(Float, nullable=True)
+    max_theoretical_pnl_pct = Column(Float, nullable=True)
+    pnl_capture_ratio = Column(Float, nullable=True)
 
     backtest = relationship("Backtest", backref="trades")

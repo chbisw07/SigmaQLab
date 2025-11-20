@@ -1208,3 +1208,105 @@ Sprint workbook updates for S05/G02:
   - `S05_G02_TF002` – records the addition of the trades table with entry/exit, side, size, and PnL columns.
   - `S05_G02_TF003` – states that the Backtest Details panel surfaces the parameter set used (when available), with JSON rendered in a readable form.
   All three tasks are marked `implemented`.
+
+---
+
+## Sprint S06 – Backtest Overhaul: Backend Metrics & Projections (G01)
+
+**Group:** G01 – Backtest Overhaul: backend metrics and projections
+**Tasks:** S06_G01_TB001–TB004
+**Status (Codex):** implemented
+
+### S06_G01_TB001 – Backtest model extensions for configs and effective params
+
+- Extended the `Backtest` ORM model in `backend/app/models.py` with additional metadata and configuration fields:
+  - `label: Optional[str]` – short human label for the run.
+  - `notes: Optional[str]` – free-form notes about the configuration or experiment.
+  - `params_effective_json: Optional[JSON]` – the fully resolved parameters actually used in the run (merged from parameter set + inline overrides).
+  - `risk_config_json: Optional[JSON]` – placeholder for future risk settings (max position size, per-trade risk, etc.).
+  - `costs_config_json: Optional[JSON]` – placeholder for commission / slippage / other charges configuration.
+  - `visual_config_json: Optional[JSON]` – placeholder for chart visualisation preferences (markers, overlays, etc.).
+- Added lightweight schema migration support for these columns:
+  - `backend/app/database.py`:
+    - `ensure_meta_schema_migrations()` now:
+      - Detects existing `backtests` table.
+      - Adds the above columns via `ALTER TABLE` when missing.
+- `BacktestService.run_single_backtest(...)` now populates `params_effective_json` with the merged `resolved_params` used for the run (or `None` when no parameters are involved), so future detail views and reports can reconstruct the configuration without re-deriving it.
+
+### S06_G01_TB002 – Persistence for trades and equity curves
+
+- Confirmed and wired the dedicated tables for trade and equity persistence:
+  - `BacktestEquityPoint` (`backtest_equity_points`):
+    - Columns: `id`, `backtest_id`, `timestamp`, `equity`.
+  - `BacktestTrade` (`backtest_trades`):
+    - Columns (existing): `id`, `backtest_id`, `symbol`, `side`, `size`, `entry_timestamp`, `entry_price`, `exit_timestamp`, `exit_price`, `pnl`.
+- Extended `BacktestTrade` to support additional per-trade derived metrics:
+  - `pnl_pct: Optional[float]` – realised PnL as a percentage of entry notional.
+  - `holding_period_bars: Optional[int]` – number of bars between entry and exit.
+  - `max_theoretical_pnl: Optional[float]` – best-case PnL from holding the position from entry to the most favourable price over the backtest horizon.
+  - `max_theoretical_pnl_pct: Optional[float]` – the same as a percentage of entry notional.
+  - `pnl_capture_ratio: Optional[float]` – realised PnL divided by `max_theoretical_pnl` (when the latter is non-zero).
+- `ensure_meta_schema_migrations()` now:
+  - Detects `backtest_trades` table and adds the new columns if missing, keeping existing databases compatible with the new code.
+- `BacktestService.run_single_backtest(...)` continues to:
+  - Persist one `BacktestEquityPoint` per equity-curve point.
+  - Persist one `BacktestTrade` per closed trade, now including the extra derived metrics (see TB004).
+
+### S06_G01_TB003 – Expanded backtest metrics (volatility, Sharpe, Sortino, Calmar)
+
+- Added helper methods on `BacktestService` to compute richer metrics from the equity curve and trades:
+  - `_compute_equity_metrics(equity_curve, timeframe)`:
+    - Inputs: list of `EquityPoint` objects and the string timeframe (`1m`, `1h`, `1d`, etc.).
+    - Computes:
+      - `total_return` = `final_equity / initial_equity - 1`.
+      - `max_drawdown` – peak-to-trough drawdown computed from the running peak.
+      - Per-bar return series from the equity curve.
+      - `volatility` – population standard deviation of bar returns.
+      - `sharpe` – mean(bar returns) / `volatility`, with zero risk-free rate for now.
+      - `sortino` – mean(bar returns) / downside deviation (based on negative returns only).
+      - `annual_return` – annualised return based on:
+        - Timeframe minutes (`_TIMEFRAME_MINUTES`) to estimate bars-per-day and bars-per-year.
+      - `calmar` – `annual_return / max_drawdown` when drawdown > 0.
+  - `_compute_trade_metrics(trades)`:
+    - Inputs: list of `TradeRecord`.
+    - Computes:
+      - `trade_count`, `avg_win`, `avg_loss`, `win_rate`.
+- `run_single_backtest(...)` now merges:
+  - `result.metrics` from the engine,
+  - `_compute_equity_metrics(...)`,
+  - `_compute_trade_metrics(...)`,
+  into a single `metrics_json` dictionary.
+- The existing tests in `backend/tests/test_backtest_engine_and_service.py` were updated to:
+  - Assert presence of new keys `volatility`, `sharpe`, `sortino`, `annual_return`, and `calmar` in `metrics_json` (when Backtrader is available).
+
+### S06_G01_TB004 – Unrealised projection and per-trade what-if metrics
+
+- Implemented per-trade “what-if” metrics directly from the price series:
+  - In `BacktestService.run_single_backtest(...)`:
+    - Uses the same `pandas.DataFrame` of closes (`df["close"]`) that was passed to the engine.
+    - For each `TradeRecord`:
+      - Determines direction (`+1` for long, `-1` for short).
+      - Builds:
+        - `window_after_entry`: all closes from `entry_timestamp` to the end of the backtest.
+        - `holding_window`: closes from `entry_timestamp` to `exit_timestamp`.
+      - Computes:
+        - `holding_period_bars` as `len(holding_window)` (or `None` if window is empty).
+        - Entry notional = `entry_price * size`.
+        - `pnl_pct` = `pnl / notional` when notional > 0.
+        - Projection series: `direction * (close_t - entry_price) * size` over `window_after_entry`.
+        - `max_theoretical_pnl` = max of that projection series (or `None` if empty).
+        - `max_theoretical_pnl_pct` = `max_theoretical_pnl / notional` when notional > 0.
+        - `pnl_capture_ratio` = `pnl / max_theoretical_pnl` when `max_theoretical_pnl != 0`.
+    - Populates the corresponding columns on each `BacktestTrade` row.
+- These per-trade fields provide the backend foundation for:
+  - Trade table columns (`what_if_pnl`, capture ratios),
+  - Projection overlays and tooltips in the forthcoming Backtest detail chart UI (S06_G02/S07 tasks).
+
+Sprint workbook updates for S06/G01:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` has been updated so that:
+  - `S06_G01_TB001` – notes Backtest model extensions for effective params and config JSON.
+  - `S06_G01_TB002` – records the enriched `backtest_trades` schema and migration helper.
+  - `S06_G01_TB003` – describes the new equity/trade risk metrics (volatility, Sharpe, Sortino, annual return, Calmar).
+  - `S06_G01_TB004` – documents per-trade what-if metrics (`pnl_pct`, `holding_period_bars`, `max_theoretical_pnl`, `pnl_capture_ratio`).
+  All four tasks are now marked `implemented`.
