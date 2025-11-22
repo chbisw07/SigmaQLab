@@ -202,11 +202,27 @@ export const BacktestDetailChart = ({
 
       const makeLineData = (
         series: { timestamp: string; value: number }[] | undefined
-      ): LineData[] =>
-        (series ?? []).map((pt) => ({
-          time: toUtcSeconds(pt.timestamp),
-          value: pt.value
-        }));
+      ): LineData[] => {
+        if (!series) return [];
+        const sorted = [...series].sort(
+          (a, b) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        const out: LineData[] = [];
+        let lastTime = Number.NEGATIVE_INFINITY;
+        sorted.forEach((pt) => {
+          const t = toUtcSeconds(pt.timestamp);
+          if (t <= lastTime) {
+            if (t === lastTime && out.length > 0) {
+              out[out.length - 1] = { time: t, value: pt.value };
+            }
+            return;
+          }
+          lastTime = t;
+          out.push({ time: t, value: pt.value });
+        });
+        return out;
+      };
 
       if (basis && basis.length > 0) {
         const basisSeries = priceChart.addLineSeries({
@@ -280,7 +296,20 @@ export const BacktestDetailChart = ({
     }
 
     if (markers.length > 0) {
-      candles.setMarkers(markers);
+      markers.sort((a, b) => a.time - b.time);
+      const dedupMarkers: typeof markers = [];
+      let lastTime = Number.NEGATIVE_INFINITY;
+      markers.forEach((m) => {
+        if (m.time <= lastTime) {
+          if (m.time === lastTime && dedupMarkers.length > 0) {
+            dedupMarkers[dedupMarkers.length - 1] = m;
+          }
+          return;
+        }
+        lastTime = m.time;
+        dedupMarkers.push(m);
+      });
+      candles.setMarkers(dedupMarkers);
     }
 
     let equityChart: IChartApi | undefined;

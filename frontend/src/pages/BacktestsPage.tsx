@@ -214,14 +214,19 @@ export const BacktestsPage = () => {
     showEquityCurve: true
   });
 
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedTab, setAdvancedTab] = useState<"inputs" | "risk" | "costs">(
+    "inputs"
+  );
+  const [runRiskConfig, setRunRiskConfig] = useState<RiskConfig>({});
+  const [runCostsConfig, setRunCostsConfig] = useState<CostsConfig>({});
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<
-    "inputs" | "risk" | "costs" | "visual" | "meta"
-  >("inputs");
+    "visual" | "meta"
+  >("visual");
   const [settingsLabel, setSettingsLabel] = useState("");
   const [settingsNotes, setSettingsNotes] = useState("");
-  const [riskConfig, setRiskConfig] = useState<RiskConfig>({});
-  const [costsConfig, setCostsConfig] = useState<CostsConfig>({});
   const [settingsState, setSettingsState] = useState<FetchState>("idle");
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
@@ -244,6 +249,9 @@ export const BacktestsPage = () => {
     setInitialCapital("100000");
     setPriceSource("kite");
     setOverrideJson("");
+    setRunRiskConfig({});
+    setRunCostsConfig({});
+    setAdvancedTab("inputs");
     setRunState("idle");
     setRunMessage(null);
   };
@@ -270,18 +278,19 @@ export const BacktestsPage = () => {
         if (backtestsRes.ok) {
           const backtestData: Backtest[] = await backtestsRes.json();
           setBacktests(backtestData);
-          if (backtestData.length > 0) {
-            const first = backtestData[0];
-            setSelectedBacktestId(first.id);
-            setSelectedBacktest(first);
-            const vc = (first.visual_config ?? {}) as VisualConfig;
-            setVisualSettings({
-              showTradeMarkers: vc.showTradeMarkers ?? true,
-              showProjection: vc.showProjection ?? true,
-              showVolume: vc.showVolume ?? true
-            });
-            setPage(0);
-          }
+        if (backtestData.length > 0) {
+          const first = backtestData[0];
+          setSelectedBacktestId(first.id);
+          setSelectedBacktest(first);
+          const vc = (first.visual_config ?? {}) as VisualConfig;
+          setVisualSettings({
+            showTradeMarkers: vc.showTradeMarkers ?? true,
+            showProjection: vc.showProjection ?? true,
+            showVolume: vc.showVolume ?? true,
+            showEquityCurve: vc.showEquityCurve ?? true
+          });
+          setPage(0);
+        }
         }
 
         if (coverageRes.ok) {
@@ -455,6 +464,13 @@ export const BacktestsPage = () => {
       params: overrides
     };
 
+    if (Object.keys(runRiskConfig).length > 0) {
+      payload.risk_config = runRiskConfig;
+    }
+    if (Object.keys(runCostsConfig).length > 0) {
+      payload.costs_config = runCostsConfig;
+    }
+
     try {
       const res = await fetch(`${API_BASE}/api/backtests`, {
         method: "POST",
@@ -570,7 +586,8 @@ export const BacktestsPage = () => {
         setVisualSettings({
           showTradeMarkers: vc.showTradeMarkers ?? true,
           showProjection: vc.showProjection ?? true,
-          showVolume: vc.showVolume ?? true
+          showVolume: vc.showVolume ?? true,
+          showEquityCurve: vc.showEquityCurve ?? true
         });
       }
 
@@ -696,16 +713,53 @@ export const BacktestsPage = () => {
             }}
           >
             <CardContent sx={{ flex: 1, overflowY: "auto" }}>
-              <Typography variant="h6" gutterBottom>
-                Run Backtest
-              </Typography>
               {!hasStrategies ? (
-                <Typography variant="body2" color="textSecondary">
-                  No strategies found. Create at least one strategy and parameter
-                  set in the Strategy Library before running backtests.
-                </Typography>
+                <>
+                  <Typography variant="h6" gutterBottom>
+                    Run Backtest
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    No strategies found. Create at least one strategy and
+                    parameter set in the Strategy Library before running
+                    backtests.
+                  </Typography>
+                </>
               ) : (
                 <Box component="form" onSubmit={handleRunBacktest} noValidate>
+                  <Box
+                    sx={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      mb: 1
+                    }}
+                  >
+                    <Typography variant="h6">Run Backtest</Typography>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        gap: 1,
+                        flexWrap: "wrap",
+                        justifyContent: "flex-end"
+                      }}
+                    >
+                      <Button
+                        type="submit"
+                        variant="contained"
+                        disabled={runState === "loading"}
+                      >
+                        {runState === "loading" ? "Running..." : "Run backtest"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outlined"
+                        size="small"
+                        onClick={() => setAdvancedOpen(true)}
+                      >
+                        Advanced settings
+                      </Button>
+                    </Box>
+                  </Box>
                   <TextField
                     select
                     fullWidth
@@ -849,15 +903,6 @@ export const BacktestsPage = () => {
                   )}
 
                   <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Initial capital"
-                    type="number"
-                    value={initialCapital}
-                    onChange={(e) => setInitialCapital(e.target.value)}
-                  />
-
-                  <TextField
                     select
                     fullWidth
                     margin="normal"
@@ -873,17 +918,7 @@ export const BacktestsPage = () => {
                     <MenuItem value="csv">csv</MenuItem>
                   </TextField>
 
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Override params JSON (optional)"
-                    multiline
-                    minRows={3}
-                    value={overrideJson}
-                    onChange={(e) => setOverrideJson(e.target.value)}
-                  />
-
-                  <Box mt={2}>
+                  <Box mt={2} sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
                     <Button
                       type="submit"
                       variant="contained"
@@ -891,7 +926,16 @@ export const BacktestsPage = () => {
                     >
                       {runState === "loading" ? "Running..." : "Run backtest"}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setAdvancedOpen(true)}
+                    >
+                      Advanced settings
+                    </Button>
                   </Box>
+
                   {runMessage && (
                     <Typography
                       variant="body2"
@@ -1099,15 +1143,9 @@ export const BacktestsPage = () => {
                       if (!selectedBacktest) return;
                       setSettingsError(null);
                       setSettingsState("idle");
-                      setSettingsTab("inputs");
+                      setSettingsTab("visual");
                       setSettingsLabel(selectedBacktest.label ?? "");
                       setSettingsNotes(selectedBacktest.notes ?? "");
-                      const rc = (selectedBacktest.risk_config ??
-                        {}) as RiskConfig;
-                      const cc = (selectedBacktest.costs_config ??
-                        {}) as CostsConfig;
-                      setRiskConfig(rc);
-                      setCostsConfig(cc);
                       const vc = (selectedBacktest.visual_config ??
                         {}) as VisualConfig;
                       setVisualSettings({
@@ -1387,6 +1425,232 @@ export const BacktestsPage = () => {
         </Dialog>
       )}
 
+      <Dialog
+        open={advancedOpen}
+        onClose={() => setAdvancedOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Advanced backtest settings</DialogTitle>
+        <DialogContent dividers>
+          <Tabs
+            value={advancedTab}
+            onChange={(_, value) =>
+              setAdvancedTab(value as typeof advancedTab)
+            }
+            variant="scrollable"
+            scrollButtons="auto"
+          >
+            <Tab label="Inputs" value="inputs" />
+            <Tab label="Risk" value="risk" />
+            <Tab label="Costs" value="costs" />
+          </Tabs>
+          <Box mt={2}>
+            {advancedTab === "inputs" && (
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Strategy inputs
+                </Typography>
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Initial capital"
+                  type="number"
+                  value={initialCapital}
+                  onChange={(e) => setInitialCapital(e.target.value)}
+                />
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Override params JSON (optional)"
+                  multiline
+                  minRows={3}
+                  value={overrideJson}
+                  onChange={(e) => setOverrideJson(e.target.value)}
+                  helperText="Advanced: provide per-run overrides to the base strategy parameters as JSON."
+                />
+              </Box>
+            )}
+
+            {advancedTab === "risk" && (
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Risk settings (applied to this run)
+                </Typography>
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Max position size (% of capital)"
+                  type="number"
+                  value={runRiskConfig.maxPositionSizePct ?? ""}
+                  onChange={(e) =>
+                    setRunRiskConfig((prev) => ({
+                      ...prev,
+                      maxPositionSizePct:
+                        e.target.value === ""
+                          ? null
+                          : Number.parseFloat(e.target.value)
+                    }))
+                  }
+                />
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Per-trade risk (% of capital)"
+                  type="number"
+                  value={runRiskConfig.perTradeRiskPct ?? ""}
+                  onChange={(e) =>
+                    setRunRiskConfig((prev) => ({
+                      ...prev,
+                      perTradeRiskPct:
+                        e.target.value === ""
+                          ? null
+                          : Number.parseFloat(e.target.value)
+                    }))
+                  }
+                />
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={Boolean(runRiskConfig.allowShortSelling)}
+                      onChange={(e) =>
+                        setRunRiskConfig((prev) => ({
+                          ...prev,
+                          allowShortSelling: e.target.checked
+                        }))
+                      }
+                    />
+                  }
+                  label="Allow short selling"
+                />
+                <Grid container spacing={2} mt={1}>
+                  <Grid item xs={6}>
+                    <TextField
+                      fullWidth
+                      margin="normal"
+                      label="Default stop-loss (%)"
+                      type="number"
+                      value={runRiskConfig.stopLossPct ?? ""}
+                      onChange={(e) =>
+                        setRunRiskConfig((prev) => ({
+                          ...prev,
+                          stopLossPct:
+                            e.target.value === ""
+                              ? null
+                              : Number.parseFloat(e.target.value)
+                        }))
+                      }
+                    />
+                  </Grid>
+                  <Grid item xs={6}>
+                    <TextField
+                      fullWidth
+                      margin="normal"
+                      label="Default take-profit (%)"
+                      type="number"
+                      value={runRiskConfig.takeProfitPct ?? ""}
+                      onChange={(e) =>
+                        setRunRiskConfig((prev) => ({
+                          ...prev,
+                          takeProfitPct:
+                            e.target.value === ""
+                              ? null
+                              : Number.parseFloat(e.target.value)
+                        }))
+                      }
+                    />
+                  </Grid>
+                </Grid>
+              </Box>
+            )}
+
+            {advancedTab === "costs" && (
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Costs & fees (applied to this run)
+                </Typography>
+                <TextField
+                  select
+                  fullWidth
+                  margin="normal"
+                  label="Commission type"
+                  value={runCostsConfig.commissionType ?? ""}
+                  onChange={(e) =>
+                    setRunCostsConfig((prev) => ({
+                      ...prev,
+                      commissionType:
+                        (e.target.value as "flat" | "percent" | "") || null
+                    }))
+                  }
+                >
+                  <MenuItem value="">None</MenuItem>
+                  <MenuItem value="flat">Flat per trade</MenuItem>
+                  <MenuItem value="percent">Percent of notional</MenuItem>
+                </TextField>
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Commission value"
+                  type="number"
+                  value={runCostsConfig.commissionValue ?? ""}
+                  onChange={(e) =>
+                    setRunCostsConfig((prev) => ({
+                      ...prev,
+                      commissionValue:
+                        e.target.value === ""
+                          ? null
+                          : Number.parseFloat(e.target.value)
+                    }))
+                  }
+                />
+                <Grid container spacing={2}>
+                  <Grid item xs={6}>
+                    <TextField
+                      fullWidth
+                      margin="normal"
+                      label="Slippage per share"
+                      type="number"
+                      value={runCostsConfig.slippagePerShare ?? ""}
+                      onChange={(e) =>
+                        setRunCostsConfig((prev) => ({
+                          ...prev,
+                          slippagePerShare:
+                            e.target.value === ""
+                              ? null
+                              : Number.parseFloat(e.target.value)
+                        }))
+                      }
+                    />
+                  </Grid>
+                  <Grid item xs={6}>
+                    <TextField
+                      fullWidth
+                      margin="normal"
+                      label="Other charges (%)"
+                      type="number"
+                      value={runCostsConfig.otherChargesPct ?? ""}
+                      onChange={(e) =>
+                        setRunCostsConfig((prev) => ({
+                          ...prev,
+                          otherChargesPct:
+                            e.target.value === ""
+                              ? null
+                              : Number.parseFloat(e.target.value)
+                        }))
+                      }
+                    />
+                  </Grid>
+                </Grid>
+              </Box>
+            )}
+
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAdvancedOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
       {selectedBacktest && (
         <Dialog
           open={settingsOpen}
@@ -1395,7 +1659,7 @@ export const BacktestsPage = () => {
           fullWidth
         >
           <DialogTitle>
-            Backtest Settings – #{selectedBacktest.id}
+            Backtest Chart Settings – #{selectedBacktest.id}
           </DialogTitle>
           <DialogContent dividers>
             <Tabs
@@ -1406,226 +1670,10 @@ export const BacktestsPage = () => {
               variant="scrollable"
               scrollButtons="auto"
             >
-              <Tab label="Inputs" value="inputs" />
-              <Tab label="Risk" value="risk" />
-              <Tab label="Costs" value="costs" />
               <Tab label="Visualization" value="visual" />
               <Tab label="Meta / Notes" value="meta" />
             </Tabs>
             <Box mt={2}>
-              {settingsTab === "inputs" && (
-                <Box>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Strategy inputs
-                  </Typography>
-                  {paramDetail ? (
-                    <>
-                      <Typography variant="body2" gutterBottom>
-                        Parameter label: {paramDetail.label}
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        component="pre"
-                        sx={{
-                          fontFamily: "monospace",
-                          fontSize: 12,
-                          whiteSpace: "pre-wrap",
-                          backgroundColor: "rgba(255,255,255,0.02)",
-                          p: 1,
-                          borderRadius: 1
-                        }}
-                      >
-                        {JSON.stringify(paramDetail.params, null, 2)}
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        color="textSecondary"
-                        mt={1}
-                      >
-                        Inputs are currently read-only; parameter overrides per
-                        backtest can be added in a later sprint.
-                      </Typography>
-                    </>
-                  ) : (
-                    <Typography variant="body2" color="textSecondary">
-                      No parameter detail available for this backtest.
-                    </Typography>
-                  )}
-                </Box>
-              )}
-
-              {settingsTab === "risk" && (
-                <Box>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Risk settings (stored metadata)
-                  </Typography>
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Max position size (% of capital)"
-                    type="number"
-                    value={riskConfig.maxPositionSizePct ?? ""}
-                    onChange={(e) =>
-                      setRiskConfig((prev) => ({
-                        ...prev,
-                        maxPositionSizePct:
-                          e.target.value === ""
-                            ? null
-                            : Number.parseFloat(e.target.value)
-                      }))
-                    }
-                  />
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Per-trade risk (% of capital)"
-                    type="number"
-                    value={riskConfig.perTradeRiskPct ?? ""}
-                    onChange={(e) =>
-                      setRiskConfig((prev) => ({
-                        ...prev,
-                        perTradeRiskPct:
-                          e.target.value === ""
-                            ? null
-                            : Number.parseFloat(e.target.value)
-                      }))
-                    }
-                  />
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={Boolean(riskConfig.allowShortSelling)}
-                        onChange={(e) =>
-                          setRiskConfig((prev) => ({
-                            ...prev,
-                            allowShortSelling: e.target.checked
-                          }))
-                        }
-                      />
-                    }
-                    label="Allow short selling"
-                  />
-                  <Grid container spacing={2} mt={1}>
-                    <Grid item xs={6}>
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="Default stop-loss (%)"
-                        type="number"
-                        value={riskConfig.stopLossPct ?? ""}
-                        onChange={(e) =>
-                          setRiskConfig((prev) => ({
-                            ...prev,
-                            stopLossPct:
-                              e.target.value === ""
-                                ? null
-                                : Number.parseFloat(e.target.value)
-                          }))
-                        }
-                      />
-                    </Grid>
-                    <Grid item xs={6}>
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="Default take-profit (%)"
-                        type="number"
-                        value={riskConfig.takeProfitPct ?? ""}
-                        onChange={(e) =>
-                          setRiskConfig((prev) => ({
-                            ...prev,
-                            takeProfitPct:
-                              e.target.value === ""
-                                ? null
-                                : Number.parseFloat(e.target.value)
-                          }))
-                        }
-                      />
-                    </Grid>
-                  </Grid>
-                </Box>
-              )}
-
-              {settingsTab === "costs" && (
-                <Box>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Costs & fees (stored metadata)
-                  </Typography>
-                  <TextField
-                    select
-                    fullWidth
-                    margin="normal"
-                    label="Commission type"
-                    value={costsConfig.commissionType ?? ""}
-                    onChange={(e) =>
-                      setCostsConfig((prev) => ({
-                        ...prev,
-                        commissionType:
-                          (e.target.value as "flat" | "percent" | "") || null
-                      }))
-                    }
-                  >
-                    <MenuItem value="">None</MenuItem>
-                    <MenuItem value="flat">Flat per trade</MenuItem>
-                    <MenuItem value="percent">Percent of notional</MenuItem>
-                  </TextField>
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Commission value"
-                    type="number"
-                    value={costsConfig.commissionValue ?? ""}
-                    onChange={(e) =>
-                      setCostsConfig((prev) => ({
-                        ...prev,
-                        commissionValue:
-                          e.target.value === ""
-                            ? null
-                            : Number.parseFloat(e.target.value)
-                      }))
-                    }
-                  />
-                  <Grid container spacing={2}>
-                    <Grid item xs={6}>
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="Slippage per share"
-                        type="number"
-                        value={costsConfig.slippagePerShare ?? ""}
-                        onChange={(e) =>
-                          setCostsConfig((prev) => ({
-                            ...prev,
-                            slippagePerShare:
-                              e.target.value === ""
-                                ? null
-                                : Number.parseFloat(e.target.value)
-                          }))
-                        }
-                      />
-                    </Grid>
-                    <Grid item xs={6}>
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="Other charges (%)"
-                        type="number"
-                        value={costsConfig.otherChargesPct ?? ""}
-                        onChange={(e) =>
-                          setCostsConfig((prev) => ({
-                            ...prev,
-                            otherChargesPct:
-                              e.target.value === ""
-                                ? null
-                                : Number.parseFloat(e.target.value)
-                          }))
-                        }
-                      />
-                    </Grid>
-                  </Grid>
-                </Box>
-              )}
-
               {settingsTab === "visual" && (
                 <Box>
                   <Typography variant="subtitle2" gutterBottom>
@@ -1739,8 +1787,6 @@ export const BacktestsPage = () => {
                   const payload: Record<string, unknown> = {
                     label: settingsLabel || null,
                     notes: settingsNotes || null,
-                    risk_config: riskConfig,
-                    costs_config: costsConfig,
                     visual_config: visualSettings
                   };
                   const res = await fetch(
@@ -1769,7 +1815,8 @@ export const BacktestsPage = () => {
                   setVisualSettings({
                     showTradeMarkers: vc.showTradeMarkers ?? true,
                     showProjection: vc.showProjection ?? true,
-                    showVolume: vc.showVolume ?? true
+                    showVolume: vc.showVolume ?? true,
+                    showEquityCurve: vc.showEquityCurve ?? true
                   });
                   setSettingsState("success");
                 } catch (error) {
