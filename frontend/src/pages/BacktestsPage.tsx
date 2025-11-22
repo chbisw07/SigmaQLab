@@ -62,6 +62,7 @@ type VisualConfig = {
   showTradeMarkers?: boolean | null;
   showProjection?: boolean | null;
   showVolume?: boolean | null;
+  chartTheme?: "dark" | "light" | "highContrast" | null;
 };
 
 type Backtest = {
@@ -163,13 +164,15 @@ export const BacktestsPage = () => {
   );
   const [selectedParamsId, setSelectedParamsId] = useState<number | null>(null);
 
-  const [symbol, setSymbol] = useState("TESTBT");
+  const [symbol, setSymbol] = useState("");
   const [exchange, setExchange] = useState("NSE");
-  const [timeframe, setTimeframe] = useState("1d");
+  const [timeframe, setTimeframe] = useState("1h");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [startTime, setStartTime] = useState("09:15");
+  const [endTime, setEndTime] = useState("15:30");
   const [initialCapital, setInitialCapital] = useState("100000");
-  const [priceSource, setPriceSource] = useState("prices_db");
+  const [priceSource, setPriceSource] = useState("kite");
   const [overrideJson, setOverrideJson] = useState("");
 
   const [runState, setRunState] = useState<FetchState>("idle");
@@ -191,18 +194,22 @@ export const BacktestsPage = () => {
   const [projection, setProjection] = useState<EquityPoint[]>([]);
   const [detailState, setDetailState] = useState<FetchState>("idle");
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [indicators, setIndicators] = useState<
+    Record<string, { timestamp: string; value: number }[]>
+  >({});
 
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
 
   const [coverageSummary, setCoverageSummary] = useState<DataSummaryItem[]>([]);
-  const [useExistingCoverage, setUseExistingCoverage] = useState(true);
+  const [useExistingCoverage, setUseExistingCoverage] = useState(false);
   const [selectedCoverageId, setSelectedCoverageId] = useState<string>("");
 
   const [visualSettings, setVisualSettings] = useState<VisualConfig>({
     showTradeMarkers: true,
     showProjection: true,
-    showVolume: true
+    showVolume: true,
+    chartTheme: "dark"
   });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -216,11 +223,32 @@ export const BacktestsPage = () => {
   const [settingsState, setSettingsState] = useState<FetchState>("idle");
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const resetRunFormDefaults = () => {
+    setSelectedStrategyId(null);
+    setSelectedParamsId(null);
+    setUseExistingCoverage(false);
+    setSymbol("");
+    setExchange("NSE");
+    setTimeframe("1h");
     const today = new Date();
-    const iso = today.toISOString().slice(0, 10);
-    setStartDate(iso);
-    setEndDate(iso);
+    const endIso = today.toISOString().slice(0, 10);
+    const start = new Date(today);
+    start.setFullYear(start.getFullYear() - 1);
+    const startIso = start.toISOString().slice(0, 10);
+    setStartDate(startIso);
+    setEndDate(endIso);
+    setStartTime("09:15");
+    setEndTime("15:30");
+    setInitialCapital("100000");
+    setPriceSource("kite");
+    setOverrideJson("");
+    setRunState("idle");
+    setRunMessage(null);
+  };
+
+  useEffect(() => {
+    resetRunFormDefaults();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -235,9 +263,6 @@ export const BacktestsPage = () => {
         if (strategiesRes.ok) {
           const strategyData: Strategy[] = await strategiesRes.json();
           setStrategies(strategyData);
-          if (strategyData.length > 0) {
-            setSelectedStrategyId(strategyData[0].id);
-          }
         }
 
         if (backtestsRes.ok) {
@@ -313,7 +338,7 @@ export const BacktestsPage = () => {
 
     if (!selectedStrategyId) {
       setRunState("error");
-      setRunMessage("Select a strategy first (Strategy Library).");
+      setRunMessage("Select a strategy first.");
       return;
     }
 
@@ -338,6 +363,8 @@ export const BacktestsPage = () => {
     let effectiveTimeframe = timeframe;
     let effectiveStartDate = startDate;
     let effectiveEndDate = endDate;
+    let effectiveStartTime = startTime || "09:15";
+    let effectiveEndTime = endTime || "15:30";
     let effectivePriceSource = priceSource || null;
 
     if (useExistingCoverage) {
@@ -354,6 +381,9 @@ export const BacktestsPage = () => {
       effectiveTimeframe = cov.timeframe;
       effectiveStartDate = cov.start_timestamp.slice(0, 10);
       effectiveEndDate = cov.end_timestamp.slice(0, 10);
+      // For existing coverage, rely on backend defaults for session times.
+      effectiveStartTime = "";
+      effectiveEndTime = "";
       effectivePriceSource = cov.source ?? priceSource ?? null;
     } else {
       // When fetching fresh data, ensure required fields are present.
@@ -414,6 +444,10 @@ export const BacktestsPage = () => {
       timeframe: effectiveTimeframe,
       start_date: effectiveStartDate,
       end_date: effectiveEndDate,
+      // Optional intraday times; when omitted the backend will default
+      // to the standard India cash session of 09:15–15:30.
+      ...(effectiveStartTime && { start_time: effectiveStartTime }),
+      ...(effectiveEndTime && { end_time: effectiveEndTime }),
       initial_capital: Number(initialCapital) || 0,
       price_source: effectivePriceSource,
       params: overrides
@@ -456,6 +490,7 @@ export const BacktestsPage = () => {
         summary += ` Final value: ${finalValue}.`;
       }
       setRunMessage(summary);
+      resetRunFormDefaults();
     } catch (error) {
       setRunState("error");
       setRunMessage(
@@ -467,7 +502,13 @@ export const BacktestsPage = () => {
   const formatDateTime = (iso: string) => {
     try {
       return new Date(iso).toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata"
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
       });
     } catch {
       return iso;
@@ -520,6 +561,7 @@ export const BacktestsPage = () => {
         setEquity(chart.equity_curve);
         setProjection(chart.projection_curve);
         setTrades(chart.trades);
+        setIndicators(chart.indicators ?? {});
         const b = chart.backtest;
         setSelectedBacktest(b);
         const vc = (b.visual_config ?? {}) as VisualConfig;
@@ -635,6 +677,7 @@ export const BacktestsPage = () => {
   })();
 
   const [showTradesTable, setShowTradesTable] = useState(false);
+  const [chartFullscreenOpen, setChartFullscreenOpen] = useState(false);
 
   return (
     <Box>
@@ -674,7 +717,9 @@ export const BacktestsPage = () => {
                           : Number.parseInt(e.target.value, 10)
                       )
                     }
+                    helperText="Select a strategy to run (required)"
                   >
+                    <MenuItem value="">None</MenuItem>
                     {strategies.map((s) => (
                       <MenuItem key={s.id} value={s.id}>
                         {s.code} – {s.name}
@@ -767,6 +812,15 @@ export const BacktestsPage = () => {
                             value={startDate}
                             onChange={(e) => setStartDate(e.target.value)}
                           />
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="Start time"
+                            type="time"
+                            InputLabelProps={{ shrink: true }}
+                            value={startTime}
+                            onChange={(e) => setStartTime(e.target.value)}
+                          />
                         </Grid>
                         <Grid item xs={6}>
                           <TextField
@@ -777,6 +831,15 @@ export const BacktestsPage = () => {
                             InputLabelProps={{ shrink: true }}
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
+                          />
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="End time"
+                            type="time"
+                            InputLabelProps={{ shrink: true }}
+                            value={endTime}
+                            onChange={(e) => setEndTime(e.target.value)}
                           />
                         </Grid>
                       </Grid>
@@ -1019,34 +1082,43 @@ export const BacktestsPage = () => {
                 <Typography variant="h6">
                   Backtest Details – #{selectedBacktest.id}
                 </Typography>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    if (!selectedBacktest) return;
-                    setSettingsError(null);
-                    setSettingsState("idle");
-                    setSettingsTab("inputs");
-                    setSettingsLabel(selectedBacktest.label ?? "");
-                    setSettingsNotes(selectedBacktest.notes ?? "");
-                    const rc = (selectedBacktest.risk_config ??
-                      {}) as RiskConfig;
-                    const cc = (selectedBacktest.costs_config ??
-                      {}) as CostsConfig;
-                    setRiskConfig(rc);
-                    setCostsConfig(cc);
-                    const vc = (selectedBacktest.visual_config ??
-                      {}) as VisualConfig;
-                    setVisualSettings({
-                      showTradeMarkers: vc.showTradeMarkers ?? true,
-                      showProjection: vc.showProjection ?? true,
-                      showVolume: vc.showVolume ?? true
-                    });
-                    setSettingsOpen(true);
-                  }}
-                >
-                  Settings
-                </Button>
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setChartFullscreenOpen(true)}
+                  >
+                    Fullscreen chart
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      if (!selectedBacktest) return;
+                      setSettingsError(null);
+                      setSettingsState("idle");
+                      setSettingsTab("inputs");
+                      setSettingsLabel(selectedBacktest.label ?? "");
+                      setSettingsNotes(selectedBacktest.notes ?? "");
+                      const rc = (selectedBacktest.risk_config ??
+                        {}) as RiskConfig;
+                      const cc = (selectedBacktest.costs_config ??
+                        {}) as CostsConfig;
+                      setRiskConfig(rc);
+                      setCostsConfig(cc);
+                      const vc = (selectedBacktest.visual_config ??
+                        {}) as VisualConfig;
+                      setVisualSettings({
+                        showTradeMarkers: vc.showTradeMarkers ?? true,
+                        showProjection: vc.showProjection ?? true,
+                        showVolume: vc.showVolume ?? true
+                      });
+                      setSettingsOpen(true);
+                    }}
+                  >
+                    Settings
+                  </Button>
+                </Box>
               </Box>
               <Grid container spacing={3}>
                 <Grid item xs={12} md={4}>
@@ -1060,7 +1132,13 @@ export const BacktestsPage = () => {
                     Symbol(s): {renderSymbols(selectedBacktest.symbols_json ?? [])}
                   </Typography>
                   <Typography variant="body2">
-                    Timeframe: {selectedBacktest.timeframe}
+                    Interval: {selectedBacktest.timeframe}
+                  </Typography>
+                  <Typography variant="body2">
+                    Period:{" "}
+                    {`${formatDateTime(selectedBacktest.start_date)} → ${formatDateTime(
+                      selectedBacktest.end_date
+                    )}`}
                   </Typography>
                   <Typography variant="body2">
                     Status: {selectedBacktest.status}
@@ -1131,18 +1209,20 @@ export const BacktestsPage = () => {
                       No chart data available for this backtest.
                     </Typography>
                   ) : (
-                    <Box sx={{ height: 380 }}>
+                    <Box sx={{ height: 520 }}>
                       <BacktestDetailChart
                         priceBars={priceBars}
                         equityCurve={equity}
                         projectionCurve={projection}
                         trades={trades}
-                        height={360}
+                        indicators={indicators}
+                        height={500}
                         showTradeMarkers={
                           visualSettings.showTradeMarkers ?? true
                         }
                         showProjection={visualSettings.showProjection ?? true}
                         showVolume={visualSettings.showVolume ?? true}
+                        chartTheme={visualSettings.chartTheme ?? "dark"}
                       />
                     </Box>
                   )}
@@ -1259,6 +1339,47 @@ export const BacktestsPage = () => {
             </CardContent>
           </Card>
         </Box>
+      )}
+
+      {selectedBacktest && chartFullscreenOpen && (
+        <Dialog
+          open={chartFullscreenOpen}
+          onClose={() => setChartFullscreenOpen(false)}
+          fullScreen
+        >
+          <DialogTitle>
+            Backtest Chart – #{selectedBacktest.id} (
+            {renderSymbols(selectedBacktest.symbols_json ?? [])}{" "}
+            {selectedBacktest.timeframe})
+          </DialogTitle>
+          <DialogContent dividers>
+            {priceBars.length === 0 ? (
+              <Typography variant="body2" color="textSecondary">
+                No chart data available for this backtest.
+              </Typography>
+            ) : (
+              <Box sx={{ height: 720 }}>
+                <BacktestDetailChart
+                  priceBars={priceBars}
+                  equityCurve={equity}
+                  projectionCurve={projection}
+                  trades={trades}
+                  indicators={indicators}
+                  height={700}
+                  showTradeMarkers={visualSettings.showTradeMarkers ?? true}
+                  showProjection={visualSettings.showProjection ?? true}
+                  showVolume={visualSettings.showVolume ?? true}
+                  chartTheme={visualSettings.chartTheme ?? "dark"}
+                />
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setChartFullscreenOpen(false)}>
+              Close
+            </Button>
+          </DialogActions>
+        </Dialog>
       )}
 
       {selectedBacktest && (
@@ -1547,6 +1668,27 @@ export const BacktestsPage = () => {
                     }
                     label="Show volume histogram"
                   />
+                  <TextField
+                    select
+                    fullWidth
+                    margin="normal"
+                    label="Chart theme"
+                    value={visualSettings.chartTheme ?? "dark"}
+                    onChange={(e) =>
+                      setVisualSettings((prev) => ({
+                        ...prev,
+                        chartTheme: e.target.value as
+                          | "dark"
+                          | "light"
+                          | "highContrast"
+                      }))
+                    }
+                    helperText="Choose visual theme for the backtest chart"
+                  >
+                    <MenuItem value="dark">Dark</MenuItem>
+                    <MenuItem value="light">Light</MenuItem>
+                    <MenuItem value="highContrast">High contrast</MenuItem>
+                  </TextField>
                 </Box>
               )}
 

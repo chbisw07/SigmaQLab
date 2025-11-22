@@ -39,19 +39,56 @@ type BacktestDetailChartProps = {
   equityCurve: EquityPoint[];
   projectionCurve: EquityPoint[];
   trades: Trade[];
+  indicators?: Record<string, { timestamp: string; value: number }[]>;
   height: number;
   showTradeMarkers: boolean;
   showProjection: boolean;
   showVolume: boolean;
+  chartTheme?: "dark" | "light" | "highContrast";
 };
 
-const PRICE_BG = "#121212";
-const GRID_COLOR = "#333";
-const TEXT_COLOR = "#e0e0e0";
-const UP_COLOR = "#26a69a";
-const DOWN_COLOR = "#ef5350";
-const VOLUME_UP_COLOR = "rgba(76, 175, 80, 0.4)";
-const VOLUME_DOWN_COLOR = "rgba(244, 67, 54, 0.4)";
+type ChartTheme = "dark" | "light" | "highContrast";
+
+const THEME_CONFIG: Record<
+  ChartTheme,
+  {
+    priceBg: string;
+    gridColor: string;
+    textColor: string;
+    upColor: string;
+    downColor: string;
+    volumeUpColor: string;
+    volumeDownColor: string;
+  }
+> = {
+  dark: {
+    priceBg: "#121212",
+    gridColor: "#333",
+    textColor: "#e0e0e0",
+    upColor: "#26a69a",
+    downColor: "#ef5350",
+    volumeUpColor: "rgba(76, 175, 80, 0.4)",
+    volumeDownColor: "rgba(244, 67, 54, 0.4)"
+  },
+  light: {
+    priceBg: "#f5f5f5",
+    gridColor: "#d0d0d0",
+    textColor: "#212121",
+    upColor: "#2e7d32",
+    downColor: "#c62828",
+    volumeUpColor: "rgba(46, 125, 50, 0.4)",
+    volumeDownColor: "rgba(198, 40, 40, 0.4)"
+  },
+  highContrast: {
+    priceBg: "#000000",
+    gridColor: "#555555",
+    textColor: "#ffffff",
+    upColor: "#00e676",
+    downColor: "#ff1744",
+    volumeUpColor: "rgba(0, 230, 118, 0.5)",
+    volumeDownColor: "rgba(255, 23, 68, 0.5)"
+  }
+};
 
 const toUtcSeconds = (isoTimestamp: string): number =>
   Math.floor(new Date(isoTimestamp).getTime() / 1000);
@@ -61,10 +98,12 @@ export const BacktestDetailChart = ({
   equityCurve,
   projectionCurve,
   trades,
+  indicators,
   height,
   showTradeMarkers,
   showProjection,
-  showVolume
+  showVolume,
+  chartTheme = "dark"
 }: BacktestDetailChartProps) => {
   const priceContainerRef = useRef<HTMLDivElement | null>(null);
   const equityContainerRef = useRef<HTMLDivElement | null>(null);
@@ -73,6 +112,8 @@ export const BacktestDetailChart = ({
     if (!priceContainerRef.current || priceBars.length === 0) {
       return;
     }
+
+    const theme = THEME_CONFIG[chartTheme] ?? THEME_CONFIG.dark;
 
     // Normalise input series: sort by time and drop duplicate timestamps so
     // lightweight-charts always receives strictly increasing time values.
@@ -122,40 +163,40 @@ export const BacktestDetailChart = ({
     const priceChart = createChart(priceContainerRef.current, {
       height: priceHeight,
       layout: {
-        background: { color: PRICE_BG },
-        textColor: TEXT_COLOR
+        background: { color: theme.priceBg },
+        textColor: theme.textColor
       },
       grid: {
-        vertLines: { color: GRID_COLOR },
-        horzLines: { color: GRID_COLOR }
+        vertLines: { color: theme.gridColor },
+        horzLines: { color: theme.gridColor }
       },
       crosshair: {
         vertLine: {
           color: "#aaaaaa",
-          labelBackgroundColor: "#1e1e1e"
+          labelBackgroundColor: theme.priceBg
         },
         horzLine: {
           color: "#aaaaaa",
-          labelBackgroundColor: "#1e1e1e"
+          labelBackgroundColor: theme.priceBg
         }
       },
       rightPriceScale: {
-        borderColor: GRID_COLOR
+        borderColor: theme.gridColor
       },
       timeScale: {
-        borderColor: GRID_COLOR,
+        borderColor: theme.gridColor,
         timeVisible: true,
         secondsVisible: false
       }
     });
 
     const candles = priceChart.addCandlestickSeries({
-      upColor: UP_COLOR,
-      borderUpColor: UP_COLOR,
-      wickUpColor: UP_COLOR,
-      downColor: DOWN_COLOR,
-      borderDownColor: DOWN_COLOR,
-      wickDownColor: DOWN_COLOR,
+      upColor: theme.upColor,
+      borderUpColor: theme.upColor,
+      wickUpColor: theme.upColor,
+      downColor: theme.downColor,
+      borderDownColor: theme.downColor,
+      wickDownColor: theme.downColor,
       priceLineVisible: true,
       priceLineColor: "#90caf9",
       priceLineStyle: LineStyle.Dashed,
@@ -181,12 +222,53 @@ export const BacktestDetailChart = ({
     }));
     candles.setData(candleData);
 
+    // Zero Lag band overlays (if present in indicators).
+    if (indicators) {
+      const basis = indicators.zl_basis;
+      const upper = indicators.zl_upper;
+      const lower = indicators.zl_lower;
+
+      const makeLineData = (
+        series: { timestamp: string; value: number }[] | undefined
+      ): LineData[] =>
+        (series ?? []).map((pt) => ({
+          time: toUtcSeconds(pt.timestamp),
+          value: pt.value
+        }));
+
+      if (basis && basis.length > 0) {
+        const basisSeries = priceChart.addLineSeries({
+          color: "#80cbc4",
+          lineWidth: 2
+        });
+        basisSeries.setData(makeLineData(basis));
+      }
+
+      if (upper && upper.length > 0) {
+        const upperSeries = priceChart.addLineSeries({
+          color: "rgba(244,67,54,0.4)",
+          lineWidth: 1
+        });
+        upperSeries.setData(makeLineData(upper));
+      }
+
+      if (lower && lower.length > 0) {
+        const lowerSeries = priceChart.addLineSeries({
+          color: "rgba(0,255,187,0.4)",
+          lineWidth: 1
+        });
+        lowerSeries.setData(makeLineData(lower));
+      }
+    }
+
     if (volumeSeries) {
       const volumeData: HistogramData[] = dedupedPriceBars.map((bar) => ({
         time: toUtcSeconds(bar.timestamp),
         value: bar.volume ?? 0,
-        color:
-          bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR
+          color:
+          bar.close >= bar.open
+            ? theme.volumeUpColor
+            : theme.volumeDownColor
       }));
       volumeSeries.setData(volumeData);
     }
@@ -216,7 +298,9 @@ export const BacktestDetailChart = ({
         markers.push({
           time: exitTime,
           position: isLong ? "aboveBar" : "belowBar",
-          color: isLong ? "#4caf50" : "#ef5350",
+          // Exits are shown in the opposite colour so they
+          // stand out clearly from entries.
+          color: isLong ? "#ef5350" : "#4caf50",
           shape: isLong ? "arrowDown" : "arrowUp",
           text: "X"
         });
@@ -233,16 +317,16 @@ export const BacktestDetailChart = ({
       equityChart = createChart(equityContainerRef.current, {
         height: equityHeight,
         layout: {
-          background: { color: PRICE_BG },
-          textColor: TEXT_COLOR
+          background: { color: theme.priceBg },
+          textColor: theme.textColor
         },
         grid: {
-          vertLines: { color: GRID_COLOR },
-          horzLines: { color: GRID_COLOR }
+          vertLines: { color: theme.gridColor },
+          horzLines: { color: theme.gridColor }
         },
-        rightPriceScale: { borderColor: GRID_COLOR },
+        rightPriceScale: { borderColor: theme.gridColor },
         timeScale: {
-          borderColor: GRID_COLOR,
+          borderColor: theme.gridColor,
           timeVisible: true,
           secondsVisible: false
         }
@@ -313,10 +397,12 @@ export const BacktestDetailChart = ({
     equityCurve,
     projectionCurve,
     trades,
+    indicators,
     height,
     showTradeMarkers,
     showProjection,
-    showVolume
+    showVolume,
+    chartTheme
   ]);
 
   return (

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..backtest_service import BacktestService
 from ..database import get_db
-from ..models import Backtest, BacktestEquityPoint, BacktestTrade
+from ..models import Backtest, BacktestEquityPoint, BacktestTrade, Strategy
 from ..prices_database import get_prices_db
 from ..prices_models import PriceBar
 from ..schemas import (
@@ -41,14 +41,21 @@ async def create_backtest(
     service = BacktestService()
 
     try:
+        # If explicit intraday times are not provided, default to the standard
+        # India cash market session of 09:15–15:30.
+        default_start_time = time(9, 15)
+        default_end_time = time(15, 30)
+        start_time = payload.start_time or default_start_time
+        end_time = payload.end_time or default_end_time
+
         backtest = service.run_single_backtest(
             meta_db=meta_db,
             prices_db=prices_db,
             strategy_id=payload.strategy_id,
             symbol=payload.symbol,
             timeframe=payload.timeframe,
-            start=datetime.combine(payload.start_date, datetime.min.time()),
-            end=datetime.combine(payload.end_date, datetime.max.time()),
+            start=datetime.combine(payload.start_date, start_time),
+            end=datetime.combine(payload.end_date, end_time),
             initial_capital=payload.initial_capital,
             params=payload.params,
             params_id=payload.params_id,
@@ -198,9 +205,10 @@ async def get_backtest_chart_data(
         for row in price_rows
     ]
 
-    # Basic indicators: fast/slow SMA on close. These can be expanded later.
     closes = [row.close for row in price_rows]
     timestamps = [row.timestamp for row in price_rows]
+
+    indicators: dict[str, List[dict[str, datetime | float]]] = {}
 
     def _sma(series: List[float], period: int) -> List[float | None]:
         out: List[float | None] = []
@@ -215,7 +223,7 @@ async def get_backtest_chart_data(
                 out.append(None)
         return out
 
-    indicators: dict[str, List[dict[str, datetime | float]]] = {}
+    # Default indicators: fast/slow SMA on close.
     sma_fast = _sma(closes, 5)
     sma_slow = _sma(closes, 20)
     indicators["sma_5"] = [
@@ -228,6 +236,92 @@ async def get_backtest_chart_data(
         for ts, val in zip(timestamps, sma_slow, strict=False)
         if val is not None
     ]
+
+    # For Zero Lag Trend MTF runs, compute an approximate band for charting so
+    # the frontend can render the basis and bands as overlays.
+    strategy = meta_db.get(Strategy, backtest.strategy_id)
+    engine_code = strategy.engine_code if strategy is not None else None
+    params_effective = backtest.params_effective_json or {}
+
+    if engine_code == "ZeroLagTrendMtfStrategy":
+        length = int(params_effective.get("length", 70))
+        mult = float(params_effective.get("mult", 1.2))
+        if length > 1:
+            lag = max((length - 1) // 2, 1)
+            zlema_values: List[float] = []
+            volatility_values: List[float] = []
+            atr_values: List[float] = []
+
+            prev_close: float | None = None
+            for row in price_rows:
+                high = float(row.high)
+                low = float(row.low)
+                close_price = float(row.close)
+                if prev_close is None:
+                    tr = high - low
+                else:
+                    tr = max(
+                        high - low,
+                        abs(high - prev_close),
+                        abs(low - prev_close),
+                    )
+                atr_values.append(tr)
+                prev_close = close_price
+
+            atr_smoothed: List[float | None] = []
+            atr_sum = 0.0
+            for i, tr in enumerate(atr_values):
+                atr_sum += tr
+                if i >= length:
+                    atr_sum -= atr_values[i - length]
+                if i >= length - 1:
+                    atr_smoothed.append(atr_sum / float(length))
+                else:
+                    atr_smoothed.append(None)
+
+            highest_window = length * 3
+            for i, close_price in enumerate(closes):
+                if i >= lag:
+                    src_lag = closes[i - lag]
+                else:
+                    src_lag = close_price
+                de_lagged = close_price + (close_price - src_lag)
+
+                if i == 0:
+                    z = de_lagged
+                else:
+                    prev = zlema_values[-1]
+                    alpha = 2.0 / (length + 1.0)
+                    z = alpha * de_lagged + (1.0 - alpha) * prev
+                zlema_values.append(z)
+
+                if i >= highest_window - 1:
+                    window = [
+                        v
+                        for v in atr_smoothed[i - highest_window + 1 : i + 1]
+                        if v is not None
+                    ]
+                    highest = max(window) if window else 0.0
+                else:
+                    highest = 0.0
+                volatility_values.append(highest * mult)
+
+            indicators["zl_basis"] = [
+                {"timestamp": ts, "value": z}
+                for ts, z in zip(timestamps, zlema_values, strict=False)
+            ]
+            indicators["zl_upper"] = [
+                {"timestamp": ts, "value": z + v}
+                for ts, z, v in zip(
+                    timestamps, zlema_values, volatility_values, strict=False
+                )
+            ]
+            indicators["zl_lower"] = [
+                {"timestamp": ts, "value": z - v}
+                for ts, z, v in zip(
+                    timestamps, zlema_values, volatility_values, strict=False
+                )
+            ]
 
     equity_points = (
         meta_db.query(BacktestEquityPoint)

@@ -62,9 +62,9 @@ export const StrategiesPage = () => {
 
   const [createState, setCreateState] = useState<FetchState>("idle");
   const [createMessage, setCreateMessage] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
   const [newCode, setNewCode] = useState("");
   const [newCategory, setNewCategory] = useState("");
+  const [newEngineCode, setNewEngineCode] = useState("");
 
   const [editState, setEditState] = useState<FetchState>("idle");
   const [editMessage, setEditMessage] = useState<string | null>(null);
@@ -75,15 +75,7 @@ export const StrategiesPage = () => {
 
   const [engineFilter, setEngineFilter] = useState<string>("all");
 
-  const [paramState, setParamState] = useState<FetchState>("idle");
-  const [paramMessage, setParamMessage] = useState<string | null>(null);
-  const [newParamLabel, setNewParamLabel] = useState("");
-  const [newParamJson, setNewParamJson] = useState('{"fast": 10, "slow": 30}');
-  const [newParamNotes, setNewParamNotes] = useState("");
-  const [editingParamId, setEditingParamId] = useState<number | null>(null);
-
   const [paramRegistry, setParamRegistry] = useState<StrategyParameter[]>([]);
-  const [baseParamLabel, setBaseParamLabel] = useState<string>("");
   const [baseParamJson, setBaseParamJson] = useState('{"fast": 10, "slow": 30}');
   const [baseParamNotes, setBaseParamNotes] = useState("");
   const [baseParamError, setBaseParamError] = useState<string | null>(null);
@@ -95,11 +87,71 @@ export const StrategiesPage = () => {
   const [editingStrategyParamId, setEditingStrategyParamId] = useState<
     number | null
   >(null);
-  const [strategyParamEditLabel, setStrategyParamEditLabel] =
-    useState<string>("");
-  const [strategyParamEditError, setStrategyParamEditError] = useState<
-    string | null
-  >(null);
+  const [editingParamJson, setEditingParamJson] = useState("");
+  const [editingParamNotes, setEditingParamNotes] = useState("");
+  const [editingParamError, setEditingParamError] = useState<string | null>(
+    null
+  );
+
+  const getEngineDefaultParams = (engineCode: string | null) => {
+    if (!engineCode) return null;
+    if (engineCode === "ZeroLagTrendMtfStrategy") {
+      return {
+        length: 70,
+        mult: 1.2,
+        stop_loss_pct: 2.0,
+        take_profit_pct: 4.0,
+        take_long_only: false,
+        pyramid_limit: 2
+      } as Record<string, unknown>;
+    }
+    if (engineCode === "SmaCrossStrategy") {
+      return {
+        fast: 10,
+        slow: 30
+      } as Record<string, unknown>;
+    }
+    return null;
+  };
+
+  const getEngineDefaultNotes = (engineCode: string | null) => {
+    if (engineCode === "ZeroLagTrendMtfStrategy") {
+      return [
+        "Zero Lag Trend default parameters:",
+        "- length: lookback for the zero-lag EMA (bars).",
+        "- mult: volatility band multiplier applied to ATR-based bands.",
+        "- stop_loss_pct: percent stop-loss from entry price.",
+        "- take_profit_pct: percent take-profit from entry price.",
+        "- take_long_only: if true, only long trades are taken.",
+        "- pyramid_limit: maximum number of pyramiding additions."
+      ].join("\n");
+    }
+    if (engineCode === "SmaCrossStrategy") {
+      return [
+        "SMA crossover default parameters:",
+        "- fast: period for the fast SMA (bars).",
+        "- slow: period for the slow SMA (bars).",
+        "Long when fast crosses above slow, flat/short when it crosses below."
+      ].join("\n");
+    }
+    return "";
+  };
+
+  const formatDateTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
+      });
+    } catch {
+      return iso;
+    }
+  };
 
   useEffect(() => {
     const loadStrategies = async () => {
@@ -126,6 +178,38 @@ export const StrategiesPage = () => {
         .filter((code): code is string => Boolean(code))
     )
   );
+
+  // Default the new strategy's engine code based on current context:
+  // - Use the engine filter when it is specific.
+  // - Otherwise, prefer the selected strategy's engine_code.
+  // - Fall back to the first known engine or SmaCrossStrategy.
+  useEffect(() => {
+    if (newEngineCode) return;
+    let next = "";
+    if (engineFilter !== "all") {
+      next = engineFilter;
+    } else if (selectedStrategy?.engine_code) {
+      next = selectedStrategy.engine_code;
+    } else if (availableEngineCodes.length > 0) {
+      next = availableEngineCodes[0];
+    } else {
+      next = "SmaCrossStrategy";
+    }
+    setNewEngineCode(next);
+  }, [engineFilter, selectedStrategy, availableEngineCodes, newEngineCode]);
+
+  // Whenever the engine for a new strategy changes (including initial
+  // defaulting), prefill the base params JSON and notes with sensible
+  // engine-specific defaults. Users can then tweak these per strategy.
+  useEffect(() => {
+    if (!newEngineCode) return;
+    const defaults = getEngineDefaultParams(newEngineCode);
+    if (defaults) {
+      setBaseParamJson(JSON.stringify(defaults, null, 2));
+    }
+    const notes = getEngineDefaultNotes(newEngineCode);
+    setBaseParamNotes(notes);
+  }, [newEngineCode]);
 
   const recomputeDefaultLabels = (all: StrategyParameter[]) => {
     const best: Record<
@@ -179,19 +263,11 @@ export const StrategiesPage = () => {
         const data: StrategyParameter[] = await res.json();
         setParamRegistry(data);
         recomputeDefaultLabels(data);
-        if (!baseParamLabel && data.length > 0) {
-          // Default to first distinct label.
-          const first = data[0];
-          setBaseParamLabel(first.label);
-          setBaseParamJson(JSON.stringify(first.params, null, 2));
-          setBaseParamNotes(first.notes ?? "");
-        }
       } catch {
         // ignore
       }
     };
     loadParamRegistry();
-    // we only want to run on mount; baseParamLabel defaulting is guarded
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -223,15 +299,12 @@ export const StrategiesPage = () => {
   const handleSelectStrategy = (strategy: Strategy) => {
     setSelectedStrategyId(strategy.id);
     setSelectedStrategy(strategy);
-    setParamState("idle");
-    setParamMessage(null);
     setEditState("idle");
     setEditMessage(null);
     setIsEditingStrategy(false);
     setEditName(strategy.name);
     setEditStatus(strategy.status ?? "");
     setEditCategory(strategy.category ?? "");
-    setEditingParamId(null);
     setDetailsOpen(true);
   };
 
@@ -241,64 +314,51 @@ export const StrategiesPage = () => {
     setCreateMessage(null);
 
     try {
-      // Determine base parameter set for the new strategy.
+      // Determine base parameter set for the new strategy from the JSON field.
       setBaseParamError(null);
-      let baseLabel: string | null = null;
-      let baseParams: Record<string, unknown> | null = null;
-      let baseNotes: string | null = null;
-
-      if (baseParamLabel) {
-        const template = paramRegistry.find((p) => p.label === baseParamLabel);
-        if (!template) {
-          setCreateState("error");
-          setCreateMessage(
-            `Selected base params label '${baseParamLabel}' not found in registry.`
-          );
-          return;
-        }
-        baseLabel = template.label;
-        baseParams = template.params;
-        baseNotes = template.notes;
-      } else {
-        // User must supply a new label + JSON.
-        if (!baseParamJson.trim()) {
-          setBaseParamError("Provide params JSON for the new base parameter set.");
-          setCreateState("error");
-          setCreateMessage("Missing params JSON for new strategy.");
-          return;
-        }
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(baseParamJson) as Record<string, unknown>;
-        } catch (error) {
-          const msg =
-            error instanceof Error
-              ? error.message
-              : "Invalid JSON for base parameters";
-          setBaseParamError(msg);
-          setCreateState("error");
-          setCreateMessage(msg);
-          return;
-        }
-        baseLabel = (newParamLabel || "default").trim();
-        baseParams = parsed;
-        baseNotes = baseParamNotes || null;
-      }
-
-      if (!baseLabel || !baseParams) {
+      if (!baseParamJson.trim()) {
+        setBaseParamError("Provide params JSON for the base parameter set.");
         setCreateState("error");
-        setCreateMessage("Base parameter set is required for new strategies.");
+        setCreateMessage("Missing params JSON for new strategy.");
+        return;
+      }
+      let baseParams: Record<string, unknown>;
+      try {
+        baseParams = JSON.parse(baseParamJson) as Record<string, unknown>;
+      } catch (error) {
+        const msg =
+          error instanceof Error
+            ? error.message
+            : "Invalid JSON for base parameters";
+        setBaseParamError(msg);
+        setCreateState("error");
+        setCreateMessage(msg);
+        return;
+      }
+      const baseNotes: string | null = baseParamNotes || null;
+
+      const engineCode = newEngineCode.trim();
+      if (!engineCode) {
+        setCreateState("error");
+        setCreateMessage(
+          "Engine code is required. Choose an existing engine or type one (e.g. SmaCrossStrategy)."
+        );
         return;
       }
 
-      const engineCode =
-        engineFilter !== "all"
-          ? engineFilter
-          : selectedStrategy?.engine_code ?? "SmaCrossStrategy";
+      const code = newCode.trim().toUpperCase();
+      if (!code) {
+        setCreateState("error");
+        setCreateMessage("Code is required for a new strategy.");
+        return;
+      }
+
+      const derivedName = code;
+      const baseLabel = `${code.toLowerCase()}_default`;
 
       const payload = {
-        name: newName,
-        code: newCode,
+        name: derivedName,
+        code,
         category: newCategory || null,
         description: null,
         status: "experimental",
@@ -349,91 +409,12 @@ export const StrategiesPage = () => {
       setSelectedStrategy(created);
       setCreateState("success");
       setCreateMessage(`Strategy '${created.code}' created.`);
-      setNewName("");
       setNewCode("");
       setNewCategory("");
+      setNewEngineCode(engineCode);
     } catch (error) {
       setCreateState("error");
       setCreateMessage(
-        error instanceof Error ? error.message : "Unexpected error occurred"
-      );
-    }
-  };
-
-  const handleCreateParam = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!selectedStrategyId) {
-      setParamState("error");
-      setParamMessage("Select a strategy first.");
-      return;
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(newParamJson) as Record<string, unknown>;
-    } catch (error) {
-      setParamState("error");
-      setParamMessage(
-        error instanceof Error ? error.message : "Invalid JSON for params"
-      );
-      return;
-    }
-
-    setParamState("loading");
-    setParamMessage(null);
-
-    try {
-      const payload = {
-        label: newParamLabel || "default",
-        params: parsed,
-        notes: newParamNotes || null
-      };
-
-      const url =
-        editingParamId === null
-          ? `${API_BASE}/api/strategies/${selectedStrategyId}/params`
-          : `${API_BASE}/api/params/${editingParamId}`;
-      const method = editingParamId === null ? "POST" : "PUT";
-
-      const res = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setParamState("error");
-        setParamMessage(
-          err.detail ??
-            (editingParamId === null
-              ? "Failed to create parameter set"
-              : "Failed to update parameter set")
-        );
-        return;
-      }
-
-      const created: StrategyParameter = await res.json();
-      if (editingParamId === null) {
-        setParams((prev) => [...prev, created]);
-        setParamRegistry((prev) => [...prev, created]);
-        setParamMessage(`Parameter set '${created.label}' created.`);
-      } else {
-        setParams((prev) =>
-          prev.map((p) => (p.id === editingParamId ? created : p))
-        );
-        setParamRegistry((prev) =>
-          prev.map((p) => (p.id === created.id ? created : p))
-        );
-        setParamMessage(`Parameter set '${created.label}' updated.`);
-      }
-      setParamState("success");
-      setNewParamLabel("");
-      setNewParamNotes("");
-      setEditingParamId(null);
-    } catch (error) {
-      setParamState("error");
-      setParamMessage(
         error instanceof Error ? error.message : "Unexpected error occurred"
       );
     }
@@ -452,12 +433,6 @@ export const StrategiesPage = () => {
       }
       setParams((prev) => prev.filter((p) => p.id !== paramId));
       setParamRegistry((prev) => prev.filter((p) => p.id !== paramId));
-      if (editingParamId === paramId) {
-        setEditingParamId(null);
-        setNewParamLabel("");
-        setNewParamNotes("");
-        setNewParamJson('{"fast": 10, "slow": 30}');
-      }
     } catch {
       // ignore; UI will remain unchanged on failure
     }
@@ -465,38 +440,34 @@ export const StrategiesPage = () => {
 
   const handleStartEditStrategyParam = (param: StrategyParameter) => {
     setEditingStrategyParamId(param.id);
-    setStrategyParamEditError(null);
-    // Preselect matching label if present in registry.
-    const hasTemplate = paramRegistry.some((p) => p.label === param.label);
-    setStrategyParamEditLabel(hasTemplate ? param.label : "");
+    setEditingParamError(null);
+    setEditingParamJson(JSON.stringify(param.params, null, 2));
+    setEditingParamNotes(param.notes ?? "");
   };
 
-  const handleApplyStrategyParamTemplate = async (
-    event: FormEvent
-  ) => {
+  const handleSaveStrategyParamEdit = async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedStrategy || editingStrategyParamId === null) {
       return;
     }
-    const label = strategyParamEditLabel.trim();
-    if (!label) {
-      setStrategyParamEditError("Choose a parameter label from the registry.");
+    if (!editingParamJson.trim()) {
+      setEditingParamError("Provide params JSON for this parameter set.");
       return;
     }
-    const template = paramRegistry.find((p) => p.label === label);
-    if (!template) {
-      setStrategyParamEditError(
-        `Label '${label}' not found in parameter registry.`
-      );
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(editingParamJson) as Record<string, unknown>;
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : "Invalid JSON for parameters";
+      setEditingParamError(msg);
       return;
     }
 
-    setStrategyParamEditError(null);
-
+    setEditingParamError(null);
     const payload = {
-      label: template.label,
-      params: template.params,
-      notes: template.notes
+      params: parsed,
+      notes: editingParamNotes || null
     };
 
     try {
@@ -511,9 +482,8 @@ export const StrategiesPage = () => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         const msg =
-          err.detail ??
-          "Failed to apply parameter template. Check for duplicate labels.";
-        setStrategyParamEditError(msg);
+          err.detail ?? "Failed to update parameter set for this strategy.";
+        setEditingParamError(msg);
         return;
       }
 
@@ -527,13 +497,14 @@ export const StrategiesPage = () => {
         prev.map((p) => (p.id === updated.id ? updated : p))
       );
       setEditingStrategyParamId(null);
-      setStrategyParamEditLabel("");
+      setEditingParamJson("");
+      setEditingParamNotes("");
     } catch (error) {
       const msg =
         error instanceof Error
           ? error.message
-          : "Unexpected error while applying parameter template.";
-      setStrategyParamEditError(msg);
+          : "Unexpected error while saving parameter set.";
+      setEditingParamError(msg);
     }
   };
 
@@ -637,7 +608,101 @@ export const StrategiesPage = () => {
         Strategy Library
       </Typography>
       <Grid container spacing={3}>
-        <Grid item xs={12} md={5}>
+        <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  New Strategy
+                </Typography>
+                <Box component="form" onSubmit={handleCreateStrategy} noValidate>
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Code"
+                    value={newCode}
+                    onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+                  />
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Category"
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
+                  />
+                  <TextField
+                    select
+                    fullWidth
+                    margin="normal"
+                    label="Engine"
+                    value={newEngineCode}
+                    onChange={(e) => {
+                      const engine = e.target.value;
+                      setNewEngineCode(engine);
+                      setBaseParamError(null);
+                    }}
+                    helperText="Select the underlying strategy engine (required)"
+                  >
+                    {availableEngineCodes.length > 0 ? (
+                      availableEngineCodes.map((engine) => (
+                        <MenuItem key={engine} value={engine}>
+                          {engine}
+                        </MenuItem>
+                      ))
+                    ) : (
+                      <MenuItem value="SmaCrossStrategy">
+                        SmaCrossStrategy
+                      </MenuItem>
+                    )}
+                  </TextField>
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Base params JSON"
+                    value={baseParamJson}
+                    onChange={(e) => setBaseParamJson(e.target.value)}
+                    multiline
+                    minRows={4}
+                    error={Boolean(baseParamError)}
+                    helperText={
+                      baseParamError ??
+                      "Defaults are derived from the selected engine; you can tweak them per strategy."
+                    }
+                  />
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Base params notes"
+                    value={baseParamNotes}
+                    onChange={(e) => setBaseParamNotes(e.target.value)}
+                    multiline
+                    minRows={4}
+                    helperText="Use this to describe the strategy idea, how parameters are interpreted, and any usage notes."
+                  />
+                  <Box mt={2}>
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      disabled={createState === "loading"}
+                    >
+                      {createState === "loading" ? "Creating..." : "Create"}
+                    </Button>
+                  </Box>
+                  {createMessage && (
+                    <Typography
+                      variant="body2"
+                      color={
+                        createState === "error" ? "error" : "textSecondary"
+                      }
+                      mt={1}
+                    >
+                      {createMessage}
+                    </Typography>
+                  )}
+                </Box>
+              </CardContent>
+            </Card>
+        </Grid>
+        <Grid item xs={12} md={8}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -664,7 +729,7 @@ export const StrategiesPage = () => {
               )}
               {strategies.length === 0 ? (
                 <Typography variant="body2" color="textSecondary">
-                  No strategies yet. Use the form below to add one.
+                  No strategies yet. Use the form on the left to add one.
                 </Typography>
               ) : (
                 <Table size="small">
@@ -686,268 +751,28 @@ export const StrategiesPage = () => {
                           (s.engine_code ?? "") === engineFilter
                       )
                       .map((s) => (
-                      <TableRow
-                        key={s.id}
-                        hover
-                        selected={selectedStrategyId === s.id}
-                        onClick={() => handleSelectStrategy(s)}
-                        sx={{ cursor: "pointer" }}
-                      >
-                        <TableCell>{s.name}</TableCell>
-                        <TableCell>{s.code}</TableCell>
-                        <TableCell>{s.engine_code ?? ""}</TableCell>
-                        <TableCell>
-                          {defaultLabelByStrategy[s.id] ?? ""}
-                        </TableCell>
-                        <TableCell>{s.status ?? ""}</TableCell>
-                        <TableCell>{s.category ?? ""}</TableCell>
-                      </TableRow>
-                    ))}
+                        <TableRow
+                          key={s.id}
+                          hover
+                          selected={selectedStrategyId === s.id}
+                          onClick={() => handleSelectStrategy(s)}
+                          sx={{ cursor: "pointer" }}
+                        >
+                          <TableCell>{s.name}</TableCell>
+                          <TableCell>{s.code}</TableCell>
+                          <TableCell>{s.engine_code ?? ""}</TableCell>
+                          <TableCell>
+                            {defaultLabelByStrategy[s.id] ?? ""}
+                          </TableCell>
+                          <TableCell>{s.status ?? ""}</TableCell>
+                          <TableCell>{s.category ?? ""}</TableCell>
+                        </TableRow>
+                      ))}
                   </TableBody>
                 </Table>
               )}
             </CardContent>
           </Card>
-
-          <Box mt={3}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  New Strategy
-                </Typography>
-                <Box component="form" onSubmit={handleCreateStrategy} noValidate>
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Name"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                  />
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Code"
-                    value={newCode}
-                    onChange={(e) => setNewCode(e.target.value.toUpperCase())}
-                  />
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Category"
-                    value={newCategory}
-                    onChange={(e) => setNewCategory(e.target.value)}
-                  />
-                  <TextField
-                    select
-                    fullWidth
-                    margin="normal"
-                    label="Base params label"
-                    helperText="Select existing params label or leave blank to define new"
-                    value={baseParamLabel}
-                    onChange={(e) => {
-                      const label = e.target.value;
-                      setBaseParamLabel(label);
-                      setBaseParamError(null);
-                      if (label) {
-                        const tmpl = paramRegistry.find((p) => p.label === label);
-                        if (tmpl) {
-                          setBaseParamJson(JSON.stringify(tmpl.params, null, 2));
-                          setBaseParamNotes(tmpl.notes ?? "");
-                        }
-                      }
-                    }}
-                  >
-                    <MenuItem value="">(Define new parameters)</MenuItem>
-                    {Array.from(
-                      new Map(
-                        paramRegistry.map((p) => [p.label, p])
-                      ).values()
-                    ).map((p) => (
-                      <MenuItem key={p.id} value={p.label}>
-                        {p.label}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  {!baseParamLabel && (
-                    <>
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="New base params label"
-                        value={newParamLabel}
-                        onChange={(e) => setNewParamLabel(e.target.value)}
-                      />
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="New base params JSON"
-                        value={baseParamJson}
-                        onChange={(e) => setBaseParamJson(e.target.value)}
-                        multiline
-                        minRows={3}
-                        error={Boolean(baseParamError)}
-                        helperText={baseParamError ?? undefined}
-                      />
-                      <TextField
-                        fullWidth
-                        margin="normal"
-                        label="New base params notes"
-                        value={baseParamNotes}
-                        onChange={(e) => setBaseParamNotes(e.target.value)}
-                      />
-                    </>
-                  )}
-                  <Box mt={2}>
-                    <Button
-                      type="submit"
-                      variant="contained"
-                      disabled={createState === "loading"}
-                    >
-                      {createState === "loading" ? "Creating..." : "Create"}
-                    </Button>
-                  </Box>
-                  {createMessage && (
-                    <Typography
-                      variant="body2"
-                      color={
-                        createState === "error" ? "error" : "textSecondary"
-                      }
-                      mt={1}
-                    >
-                      {createMessage}
-                    </Typography>
-                  )}
-                </Box>
-              </CardContent>
-            </Card>
-          </Box>
-
-          <Box mt={3}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Parameter Registry
-                </Typography>
-                {paramRegistry.length === 0 ? (
-                  <Typography variant="body2" color="textSecondary">
-                    No parameters yet. Create a parameter set using the form
-                    below (attached to the currently selected strategy) and it
-                    will appear here for reuse.
-                  </Typography>
-                ) : (
-                  <Table size="small" sx={{ mb: 2 }}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Label</TableCell>
-                        <TableCell>Params</TableCell>
-                        <TableCell>Notes (sample)</TableCell>
-                        <TableCell align="right">Strategies</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {Array.from(
-                        paramRegistry.reduce((map, p) => {
-                          const existing = map.get(p.label);
-                          if (!existing) {
-                            map.set(p.label, {
-                              label: p.label,
-                              params: p.params,
-                              notes: p.notes,
-                              strategies: new Set<number>([p.strategy_id])
-                            });
-                          } else {
-                            existing.strategies.add(p.strategy_id);
-                          }
-                          return map;
-                        }, new Map<string, { label: string; params: Record<string, unknown>; notes: string | null; strategies: Set<number> }>())
-                      ).map(([label, info]) => (
-                        <TableRow key={label}>
-                          <TableCell>{label}</TableCell>
-                          <TableCell>
-                            <code>
-                              {JSON.stringify(info.params, null, 0).slice(0, 80)}
-                              {JSON.stringify(info.params, null, 0).length >
-                                80 && "..."}
-                            </code>
-                          </TableCell>
-                          <TableCell>
-                            {info.notes && info.notes.length > 0
-                              ? info.notes
-                              : "\u00a0"}
-                          </TableCell>
-                          <TableCell align="right">
-                            {info.strategies.size}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-
-                <Typography variant="subtitle1" gutterBottom>
-                  New Parameter Template
-                </Typography>
-                <Typography variant="body2" color="textSecondary">
-                  New templates are attached to the currently selected strategy
-                  and become available for reuse when creating other strategies.
-                </Typography>
-                <Box
-                  component="form"
-                  onSubmit={handleCreateParam}
-                  noValidate
-                  mt={1}
-                >
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Label"
-                    value={newParamLabel}
-                    onChange={(e) => setNewParamLabel(e.target.value)}
-                  />
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Params JSON"
-                    value={newParamJson}
-                    onChange={(e) => setNewParamJson(e.target.value)}
-                    multiline
-                    minRows={3}
-                  />
-                  <TextField
-                    fullWidth
-                    margin="normal"
-                    label="Notes"
-                    value={newParamNotes}
-                    onChange={(e) => setNewParamNotes(e.target.value)}
-                  />
-                  <Box mt={2}>
-                    <Button
-                      type="submit"
-                      variant="contained"
-                      disabled={paramState === "loading"}
-                    >
-                      {paramState === "loading"
-                        ? editingParamId === null
-                          ? "Creating..."
-                          : "Saving..."
-                        : editingParamId === null
-                          ? "Create parameter template"
-                          : "Save parameter template"}
-                    </Button>
-                  </Box>
-                  {paramMessage && (
-                    <Typography
-                      variant="body2"
-                      color={paramState === "error" ? "error" : "textSecondary"}
-                      mt={1}
-                    >
-                      {paramMessage}
-                    </Typography>
-                  )}
-                </Box>
-              </CardContent>
-            </Card>
-          </Box>
         </Grid>
       </Grid>
 
@@ -1117,7 +942,7 @@ export const StrategiesPage = () => {
                 </Typography>
                 {params.length === 0 ? (
                   <Typography variant="body2" color="textSecondary">
-                    No parameter sets yet. Use the form below to add one.
+                    No parameter sets yet for this strategy.
                   </Typography>
                 ) : (
                   <Table size="small">
@@ -1149,7 +974,7 @@ export const StrategiesPage = () => {
                             {p.notes && p.notes.length > 0 ? p.notes : "\u00a0"}
                           </TableCell>
                           <TableCell>
-                            {new Date(p.created_at).toLocaleString()}
+                            {formatDateTime(p.created_at)}
                           </TableCell>
                               <TableCell align="right">
                                 <Button
@@ -1181,35 +1006,31 @@ export const StrategiesPage = () => {
               {editingStrategyParamId !== null && (
                 <Box
                   component="form"
-                  onSubmit={handleApplyStrategyParamTemplate}
+                  onSubmit={handleSaveStrategyParamEdit}
                   mt={2}
                 >
                   <Typography variant="subtitle2" gutterBottom>
-                    Change parameter template
+                    Edit parameter JSON
                   </Typography>
                   <TextField
-                    select
                     fullWidth
                     margin="normal"
-                    label="Registry label"
-                    value={strategyParamEditLabel}
-                    onChange={(e) => {
-                      setStrategyParamEditLabel(e.target.value);
-                      setStrategyParamEditError(null);
-                    }}
-                    helperText="Select a label from the parameter registry to apply to this strategy."
-                  >
-                    {Array.from(
-                      new Map(paramRegistry.map((p) => [p.label, p])).values()
-                    ).map((p) => (
-                      <MenuItem key={p.id} value={p.label}>
-                        {p.label}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  {strategyParamEditError && (
+                    label="Params JSON"
+                    value={editingParamJson}
+                    onChange={(e) => setEditingParamJson(e.target.value)}
+                    multiline
+                    minRows={3}
+                  />
+                  <TextField
+                    fullWidth
+                    margin="normal"
+                    label="Notes"
+                    value={editingParamNotes}
+                    onChange={(e) => setEditingParamNotes(e.target.value)}
+                  />
+                  {editingParamError && (
                     <Typography variant="body2" color="error" mt={1}>
-                      {strategyParamEditError}
+                      {editingParamError}
                     </Typography>
                   )}
                   <Box mt={2}>
@@ -1219,15 +1040,16 @@ export const StrategiesPage = () => {
                       size="small"
                       sx={{ mr: 1 }}
                     >
-                      Apply template
+                      Save
                     </Button>
                     <Button
                       size="small"
                       variant="text"
                       onClick={() => {
                         setEditingStrategyParamId(null);
-                        setStrategyParamEditLabel("");
-                        setStrategyParamEditError(null);
+                        setEditingParamJson("");
+                        setEditingParamNotes("");
+                        setEditingParamError(null);
                       }}
                     >
                       Cancel

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -197,6 +197,10 @@ class BacktestCreateRequest(BaseModel):
     timeframe: str
     start_date: date
     end_date: date
+    # Optional intraday session times. When omitted, the backend will default
+    # to the standard India cash session of 09:15–15:30 IST.
+    start_time: time | None = None
+    end_time: time | None = None
     initial_capital: float = 100_000.0
     params: dict[str, Any] | None = Field(
         default=None,

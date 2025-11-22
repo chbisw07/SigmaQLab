@@ -66,6 +66,32 @@ def seed_preset_strategies(session: Session) -> None:
                 },
             ],
         },
+        {
+            "code": "ZLAG_MTF",
+            "name": "Zero Lag Trend MTF (default)",
+            "category": "trend",
+            "description": (
+                "Zero Lag Trend Strategy (MTF-style) backed by "
+                "ZeroLagTrendMtfStrategy."
+            ),
+            "status": "experimental",
+            "tags": ["zerolag", "trend"],
+            "engine_code": "ZeroLagTrendMtfStrategy",
+            "params": [
+                {
+                    "label": "default",
+                    "params": {
+                        "length": 70,
+                        "mult": 1.2,
+                        "stop_loss_pct": 2.0,
+                        "take_profit_pct": 4.0,
+                        "take_long_only": False,
+                        "pyramid_limit": 2,
+                    },
+                    "notes": "Defaults derived from zero_lag_trend_strategy_mtf.pine.",
+                }
+            ],
+        },
     ]
 
     for preset in presets:

@@ -1506,3 +1506,189 @@ Sprint workbook updates for S08:
   - `S08_G01_TB002` – Regression tests added for `PATCH /api/backtests/{id}/settings`.
   - `S08_G01_TB003` – Test/marker and lint polish (pytest integration mark, Ruff clean-up).
   All three tasks are now `implemented`.
+
+---
+
+## Sprint S09 – Zero Lag Trend Strategy (MTF): Pine analysis and engine design (G01)
+
+**Group:** G01 – Zero Lag Trend Strategy (MTF): Pine analysis and engine design
+**Tasks:** S09_G01_TB001–TB003
+**Status (Codex):** implemented
+
+### S09_G01_TB001 – Pine script analysis
+
+- Analysed the TradingView script `ref_strategy_code/zero_lag_trend_strategy_mtf.pine` and documented:
+  - All user inputs (length, band multiplier, MTF timeframes, colours, stop/target %, long‑only toggle).
+  - Zero‑lag EMA and volatility band calculations:
+    - De‑lagged price input and ATR‑based band width (`highest(atr(length), length*3) * mult`).
+  - Trend state machine:
+    - `trend` variable taking values +1/‑1 based on crossovers of price vs `zlema ± volatility`.
+  - Entry/exit rules:
+    - Trend‑reversal‑driven entries with custom pyramiding limit.
+    - Stop‑loss / take‑profit orders defined as % of `strategy.position_avg_price`.
+  - Multi‑timeframe diagnostics (MTF table) and their current role as display‑only signals.
+- Findings and structure are captured in `docs/zero_lag_trend_mtf_design.md` (section 1).
+
+### S09_G01_TB002 – Backtrader engine design
+
+- Designed a Backtrader strategy `ZeroLagTrendMtfStrategy` that mirrors the Pine logic while fitting SigmaQLab’s existing Backtest Overhaul architecture:
+  - Proposed params:
+    - `length`, `mult`, `stop_loss_pct`, `take_profit_pct`, `take_long_only`, `pyramid_limit`, and optional MTF timeframe labels.
+  - Internal indicators and state:
+    - Zero‑lag EMA implementation, ATR‑highest volatility band, per‑bar `trend` state, and storage of basis/bands for chart overlays.
+  - Order logic mapping:
+    - On trend reversals, close opposite positions, obey `pyramid_limit`, and open new positions in the direction of the new trend, with long‑only behaviour honoured.
+    - Attach percentage‑based stop/target logic approximating Pine’s `strategy.exit` calls.
+  - Engine integration:
+    - Plan to register `ZeroLagTrendMtfStrategy` under `STRATEGY_REGISTRY["ZeroLagTrendMtfStrategy"]` with aliases for SigmaQLab strategy codes.
+- The full design is written in `docs/zero_lag_trend_mtf_design.md` (section 2).
+
+### S09_G01_TB003 – Verification plan and reference cases
+
+- Defined the structure for TV‑parity verification without hard‑coding numbers (to be supplied later from TradingView runs):
+  - Reference case components:
+    - Symbol, exchange, timeframe, date range.
+    - Param set (matching Pine defaults or variants).
+    - Benchmark metrics: trade count, net profit, max drawdown, plus optionally key trades (entry/exit dates, side).
+  - Pytest harness outline:
+    - Metric parity test: compare trade count, PnL, DD against benchmarks within tolerances.
+    - Signal alignment test: inspect a short window of trades and compare entry/exit timestamps to reference examples.
+- This plan is also documented in `docs/zero_lag_trend_mtf_design.md` (section 3).
+
+Sprint workbook updates for S09/G01:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` now marks:
+  - `S09_G01_TB001` – Pine script inputs/logic/risk/MTF analysed and documented.
+  - `S09_G01_TB002` – Backtrader engine design (params, trend state, orders, registry integration) described.
+  - `S09_G01_TB003` – Verification/test plan structure defined for future TV parity checks.
+  All three tasks are `implemented`; subsequent S09_G02–G04 tasks were scheduled for later implementation.
+
+---
+
+## Sprint S09 – Zero Lag Trend Strategy (MTF): Backtrader implementation and verification harness (G02)
+
+**Group:** G02 – Zero Lag Trend Strategy (MTF): Backtrader implementation and verification harness
+**Tasks:** S09_G02_TB001–TB004
+**Status (Codex):** implemented
+
+### S09_G02_TB001 – Backtrader implementation of ZeroLagTrendMtfStrategy
+
+- Implemented `ZeroLagTrendMtfStrategy` in `backend/app/backtest_engine.py`:
+  - Introduced a shared `SigmaBaseStrategy` that records equity and closed trades into `_equity_curve` and `_sigma_trades`.
+  - Added a `ZeroLagEMA` indicator that approximates the Pine zero‑lag EMA:
+    - Uses a de‑lagged input `src + (src - src_lag)` with a configurable look‑back and EMA smoothing.
+  - Inside `ZeroLagTrendMtfStrategy`:
+    - Computes ATR and a `Highest(ATR, length*3)` band scaled by `mult` to mirror the Pine volatility band.
+    - Maintains integer `trend` state (+1/‑1) by detecting crossings of price versus `zlema ± volatility`.
+    - Implements entry logic:
+      - On bullish trend reversal: closes shorts and opens/increments longs up to `pyramid_limit`.
+      - On bearish trend reversal (when `take_long_only` is false): closes longs and opens/increments shorts down to `-pyramid_limit`.
+    - Implements percentage stop‑loss / take‑profit exits based on `position.price`, checking bar high/low against calculated stop/target levels.
+
+### S09_G02_TB002 – Engine registry wiring
+
+- Extended `STRATEGY_REGISTRY` in `backend/app/backtest_engine.py`:
+  - Added canonical key `"ZeroLagTrendMtfStrategy"` pointing to the new strategy class, with placeholders when Backtrader is absent.
+  - Adjusted `BacktraderEngine.run()` to treat strategies generically via `SigmaBaseStrategy`, so any registered engine that records `_equity_curve` / `_sigma_trades` can be used without special‑casing.
+
+### S09_G02_TB003 – Engine-level verification harness
+
+- Added `backend/tests/test_zero_lag_trend_mtf_engine.py`:
+  - `test_zero_lag_engine_basic_metrics`:
+    - Builds a deterministic synthetic OHLCV series with several mild trend shifts.
+    - Runs `BacktraderEngine` with `strategy_code="ZeroLagTrendMtfStrategy"` and a compact parameter set (`length=20`, `mult=1.0`, etc.).
+    - Asserts non‑empty equity curve/trades and checks that final equity, PnL and trade count fall within bounded ranges, acting as a regression guard on overall behaviour.
+  - Module is guarded with `pytest.importorskip("backtrader")` so it is skipped cleanly when Backtrader is unavailable.
+
+### S09_G02_TB004 – BacktestService integration test
+
+- In the same test module, added `test_zero_lag_service_trades_and_equity`:
+  - Seeds a `Strategy` row with `engine_code="ZeroLagTrendMtfStrategy"` and a matching `StrategyParameter` in the meta DB.
+  - Writes the synthetic OHLCV series into `sigmaqlab_prices.db` via `PriceBar`.
+  - Runs `BacktestService.run_single_backtest(...)` and asserts:
+    - Engine `backtrader`, symbol list `["TESTZL"]`, and status `completed`.
+    - Equity points and at least one trade are persisted for the backtest.
+
+Sprint workbook updates for S09/G02:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` now marks:
+  - `S09_G02_TB001` – ZeroLagTrendMtfStrategy implemented with zero‑lag EMA, ATR bands, trend state, and stop/target/pyramiding logic.
+  - `S09_G02_TB002` – Engine registry extended with Zero Lag engine key for Strategy.engine_code wiring.
+  - `S09_G02_TB003` – Synthetic‑data pytest harness added to validate Zero Lag metrics shape.
+  - `S09_G02_TB004` – BacktestService integration test added to ensure equity/trades persistence for Zero Lag runs.
+  All four tasks are now `implemented`; S09_G03–G04 cover integration and UI work.
+
+---
+
+## Sprint S09 – Zero Lag Trend Strategy (MTF): SigmaQLab backend/API integration and UI wiring (G03–G04)
+
+**Groups:**
+- G03 – Zero Lag Trend Strategy (MTF): SigmaQLab backend and API integration
+- G04 – Zero Lag Trend Strategy (MTF): UI integration in Strategy Library and Backtests
+
+**Status (Codex):** implemented
+
+### G03 – Backend/API integration highlights
+
+- Seeded a new preset strategy in `backend/app/seed.py`:
+  - `code="ZLAG_MTF"`, `name="Zero Lag Trend MTF (default)"`, `category="trend"`.
+  - `engine_code="ZeroLagTrendMtfStrategy"`.
+  - Default params aligned with Pine defaults:
+    - `length=70`, `mult=1.2`, `stop_loss_pct=2.0`, `take_profit_pct=4.0`, `take_long_only=False`, `pyramid_limit=2`.
+- Extended `/api/backtests/{id}/chart-data` in `backend/app/routers/backtests.py`:
+  - For all strategies:
+    - Keeps existing SMA(5)/SMA(20) indicators.
+  - For backtests whose `Strategy.engine_code == "ZeroLagTrendMtfStrategy"`:
+    - Uses `backtest.params_effective_json` (or defaults) to recompute:
+      - Zero‑lag basis (`zl_basis`),
+      - Upper band (`zl_upper`),
+      - Lower band (`zl_lower`),
+      from the stored OHLCV series:
+        - De‑lagged close + EMA.
+        - ATR smoothed over `length` and a `highest` over `length*3`, scaled by `mult`.
+    - Injects these series into the `indicators` map of `BacktestChartDataResponse`.
+- Metrics:
+  - Zero Lag runs still flow through the existing metrics pipeline in `BacktestService` (S06), so standard risk metrics (total_return, DD, Sharpe, etc.) are available without additional work.
+
+### G04 – UI integration highlights
+
+- Strategy Library:
+  - Because `seed_preset_strategies` now creates `ZLAG_MTF` with `engine_code="ZeroLagTrendMtfStrategy"`, the new strategy appears automatically in the Strategies page:
+    - Listed under the engine filter for `ZeroLagTrendMtfStrategy`.
+    - Can be used as a base for new business strategies (aliases with different params/labels) without further UI changes.
+- Backtests page:
+  - Run Backtest:
+    - Once a Zero Lag–backed strategy (e.g. `ZLAG_MTF`) is chosen in **Strategy**, it behaves like any other engine:
+      - The default parameters from the strategy’s `default` label are used, and you can override via JSON if needed.
+  - Backtest Details chart:
+    - Updated `BacktestDetailChart` (`frontend/src/features/backtests/components/BacktestDetailChart.tsx`) to accept an `indicators` map.
+    - Zero Lag overlays:
+      - When `indicators` includes `zl_basis`, `zl_upper`, `zl_lower`:
+        - Renders the basis line and bands on the price chart using `lightweight-charts` line series:
+          - Basis: teal line (`#80cbc4`).
+          - Upper band: semi‑transparent red.
+          - Lower band: semi‑transparent green/teal.
+      - `BacktestsPage` passes `chart.indicators` from `/api/backtests/{id}/chart-data` into `<BacktestDetailChart />`, so Zero Lag runs show their band while other strategies simply ignore these series.
+    - Trade markers and usability:
+      - Price pane now renders long/short entry/exit markers for all engines:
+        - Entries: green arrows for longs, red for shorts.
+        - Exits: opposite colours so exits stand out from entries.
+      - Equity pane is vertically enlarged and a **fullscreen chart** dialog is available from Backtest Details, making dense trade sequences (like Zero Lag and SMA crossovers on intraday data) easier to inspect.
+    - Chart theming:
+      - Introduced per‑backtest visual config `chartTheme` (`dark`, `light`, `highContrast`) stored in `Backtest.visual_config_json`.
+      - `BacktestsPage` wiring:
+        - Settings → Visualization tab exposes a “Chart theme” selector.
+        - Selected theme is persisted back via `/api/backtests/{id}/settings`.
+      - `BacktestDetailChart` reads the theme and applies a full colour palette (background, grid, text, candle up/down colours, volume histogram) so the Zero Lag band + trade markers remain readable across themes.
+
+Sprint workbook updates for S09/G03–G04:
+
+- `docs/qlab_sprint_tasks_codex.xlsx` now marks:
+  - `S09_G03_TB001` – ZLAG_MTF strategy seeded in meta DB with ZeroLagTrendMtfStrategy and default params.
+  - `S09_G03_TB002` – Chart‑data endpoint emits `zl_basis`, `zl_upper`, `zl_lower` for Zero Lag runs.
+  - `S09_G03_TB003` – Zero Lag runs use existing metrics pipeline; additional strategy‑specific metrics can be layered later if desired.
+  - `S09_G04_TF001` – Strategy Library surfaces Zero Lag strategies via normal engine filter/metadata.
+  - `S09_G04_TF002` – Run Backtest form supports Zero Lag strategies via Strategy.engine_code without special handling.
+  - `S09_G04_TF003` – Backtest Detail chart renders Zero Lag basis/bands using the new indicator series when present.
+  - `S09_G04_TF004` – Backtest Detail chart renders trade markers, supports fullscreen mode, and honours per‑backtest chart theme preferences.
+  All S09 tasks (G01–G04) are now `implemented` at the backend/API + UI level.
