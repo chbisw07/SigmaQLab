@@ -13,6 +13,8 @@ import {
   INDICATORS,
   IndicatorDefinition
 } from "../indicatorCatalog";
+import type { ChartThemeId } from "../../../chartThemes";
+import { CHART_THEME_CONFIG } from "../../../chartThemes";
 import type { PreviewWithIndicators } from "../../../pages/DataPage";
 
 type RangePreset =
@@ -38,15 +40,8 @@ type DataPreviewChartProps = {
   rangePreset?: RangePreset;
   showLastPriceLine?: boolean;
   highlightLatestBar?: boolean;
+  chartTheme?: ChartThemeId;
 };
-
-const PRICE_BG = "#121212";
-const GRID_COLOR = "#333";
-const TEXT_COLOR = "#e0e0e0";
-const UP_COLOR = "#26a69a";
-const DOWN_COLOR = "#ef5350";
-const VOLUME_UP_COLOR = "rgba(76, 175, 80, 0.4)";
-const VOLUME_DOWN_COLOR = "rgba(244, 67, 54, 0.4)";
 
 const toUtcSeconds = (isoTimestamp: string): number =>
   Math.floor(new Date(isoTimestamp).getTime() / 1000);
@@ -58,7 +53,8 @@ export const DataPreviewChart = ({
   showVolume = true,
   rangePreset = "all",
   showLastPriceLine = true,
-  highlightLatestBar = false
+  highlightLatestBar = false,
+  chartTheme = "dark"
 }: DataPreviewChartProps) => {
   const priceContainerRef = useRef<HTMLDivElement | null>(null);
   const oscContainerRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +63,8 @@ export const DataPreviewChart = ({
     if (!priceContainerRef.current || data.length === 0) {
       return;
     }
+
+    const theme = CHART_THEME_CONFIG[chartTheme] ?? CHART_THEME_CONFIG.dark;
 
     const secondsMap: Partial<Record<RangePreset, number>> = {
       "1m": 60,
@@ -114,40 +112,40 @@ export const DataPreviewChart = ({
     const priceChart = createChart(priceContainerRef.current, {
       height: priceHeight + volHeight,
       layout: {
-        background: { color: PRICE_BG },
-        textColor: TEXT_COLOR
+        background: { color: theme.priceBg },
+        textColor: theme.textColor
       },
       grid: {
-        vertLines: { color: GRID_COLOR },
-        horzLines: { color: GRID_COLOR }
+        vertLines: { color: theme.gridColor },
+        horzLines: { color: theme.gridColor }
       },
       crosshair: {
         vertLine: {
           color: "#aaaaaa",
-          labelBackgroundColor: "#1e1e1e"
+          labelBackgroundColor: theme.priceBg
         },
         horzLine: {
           color: "#aaaaaa",
-          labelBackgroundColor: "#1e1e1e"
+          labelBackgroundColor: theme.priceBg
         }
       },
       rightPriceScale: {
-        borderColor: GRID_COLOR
+        borderColor: theme.gridColor
       },
       timeScale: {
-        borderColor: GRID_COLOR,
+        borderColor: theme.gridColor,
         timeVisible: true,
         secondsVisible: false
       }
     });
 
     const candles = priceChart.addCandlestickSeries({
-      upColor: UP_COLOR,
-      borderUpColor: UP_COLOR,
-      wickUpColor: UP_COLOR,
-      downColor: DOWN_COLOR,
-      borderDownColor: DOWN_COLOR,
-      wickDownColor: DOWN_COLOR,
+      upColor: theme.upColor,
+      borderUpColor: theme.upColor,
+      wickUpColor: theme.upColor,
+      downColor: theme.downColor,
+      borderDownColor: theme.downColor,
+      wickDownColor: theme.downColor,
       priceLineVisible: showLastPriceLine,
       priceLineColor: "#90caf9",
       priceLineStyle: LineStyle.Dashed,
@@ -193,7 +191,9 @@ export const DataPreviewChart = ({
         time: toUtcSeconds(bar.timestamp),
         value: bar.volume ?? 0,
         color:
-          bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR
+          bar.close >= bar.open
+            ? theme.volumeUpColor
+            : theme.volumeDownColor
       }));
       volumeSeries.setData(volumeData);
     }
@@ -231,16 +231,16 @@ export const DataPreviewChart = ({
       oscChart = createChart(oscContainerRef.current, {
         height: oscHeight,
         layout: {
-          background: { color: PRICE_BG },
-          textColor: TEXT_COLOR
+          background: { color: theme.priceBg },
+          textColor: theme.textColor
         },
         grid: {
-          vertLines: { color: GRID_COLOR },
-          horzLines: { color: GRID_COLOR }
+          vertLines: { color: theme.gridColor },
+          horzLines: { color: theme.gridColor }
         },
-        rightPriceScale: { borderColor: GRID_COLOR },
+        rightPriceScale: { borderColor: theme.gridColor },
         timeScale: {
-          borderColor: GRID_COLOR,
+          borderColor: theme.gridColor,
           timeVisible: true,
           secondsVisible: false
         }
@@ -309,7 +309,16 @@ export const DataPreviewChart = ({
         oscChart.remove();
       }
     };
-  }, [data, selectedIndicatorIds, height, showVolume, rangePreset, showLastPriceLine, highlightLatestBar]);
+  }, [
+    data,
+    selectedIndicatorIds,
+    height,
+    showVolume,
+    rangePreset,
+    showLastPriceLine,
+    highlightLatestBar,
+    chartTheme
+  ]);
 
   return (
     <div>

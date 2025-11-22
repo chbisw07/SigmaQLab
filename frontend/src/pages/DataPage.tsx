@@ -22,6 +22,7 @@ import {
   INDICATORS_BY_CATEGORY,
   IndicatorDefinition
 } from "../features/data/indicatorCatalog";
+import { useAppearance } from "../appearanceContext";
 
 type DataSummaryItem = {
   coverage_id: string;
@@ -84,6 +85,7 @@ type PreviewRangePreset =
 const API_BASE = "http://127.0.0.1:8000";
 
 export const DataPage = () => {
+  const { chartThemeId } = useAppearance();
   const [symbol, setSymbol] = useState("HDFCBANK");
   const [timeframe, setTimeframe] = useState("1d");
   const [exchange, setExchange] = useState("NSE");
@@ -1076,6 +1078,7 @@ export const DataPage = () => {
                     rangePreset={previewRange}
                     showLastPriceLine={showLastPriceLine}
                     highlightLatestBar={highlightLatestBar}
+                    chartTheme={chartThemeId}
                   />
                 </Box>
               </>

@@ -23,6 +23,7 @@ import {
 } from "@mui/material";
 import { FormEvent, useEffect, useState } from "react";
 import { BacktestDetailChart } from "../features/backtests/components/BacktestDetailChart";
+import { useAppearance } from "../appearanceContext";
 
 type Strategy = {
   id: number;
@@ -62,7 +63,7 @@ type VisualConfig = {
   showTradeMarkers?: boolean | null;
   showProjection?: boolean | null;
   showVolume?: boolean | null;
-  chartTheme?: "dark" | "light" | "highContrast" | null;
+  showEquityCurve?: boolean | null;
 };
 
 type Backtest = {
@@ -158,6 +159,7 @@ type DataSummaryItem = {
 const API_BASE = "http://127.0.0.1:8000";
 
 export const BacktestsPage = () => {
+  const { chartThemeId } = useAppearance();
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(
     null
@@ -209,7 +211,7 @@ export const BacktestsPage = () => {
     showTradeMarkers: true,
     showProjection: true,
     showVolume: true,
-    chartTheme: "dark"
+    showEquityCurve: true
   });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1111,7 +1113,8 @@ export const BacktestsPage = () => {
                       setVisualSettings({
                         showTradeMarkers: vc.showTradeMarkers ?? true,
                         showProjection: vc.showProjection ?? true,
-                        showVolume: vc.showVolume ?? true
+                        showVolume: vc.showVolume ?? true,
+                        showEquityCurve: vc.showEquityCurve ?? true
                       });
                       setSettingsOpen(true);
                     }}
@@ -1121,7 +1124,7 @@ export const BacktestsPage = () => {
                 </Box>
               </Box>
               <Grid container spacing={3}>
-                <Grid item xs={12} md={4}>
+                <Grid item xs={12} md={3}>
                   <Typography variant="subtitle2" gutterBottom>
                     Summary
                   </Typography>
@@ -1200,7 +1203,7 @@ export const BacktestsPage = () => {
                   )}
                 </Grid>
 
-                <Grid item xs={12} md={8}>
+                <Grid item xs={12} md={9}>
                   <Typography variant="subtitle2" gutterBottom>
                     Price & Trades
                   </Typography>
@@ -1209,20 +1212,21 @@ export const BacktestsPage = () => {
                       No chart data available for this backtest.
                     </Typography>
                   ) : (
-                    <Box sx={{ height: 520 }}>
+                    <Box sx={{ height: 640 }}>
                       <BacktestDetailChart
                         priceBars={priceBars}
                         equityCurve={equity}
                         projectionCurve={projection}
                         trades={trades}
                         indicators={indicators}
-                        height={500}
+                        height={620}
                         showTradeMarkers={
                           visualSettings.showTradeMarkers ?? true
                         }
                         showProjection={visualSettings.showProjection ?? true}
                         showVolume={visualSettings.showVolume ?? true}
-                        chartTheme={visualSettings.chartTheme ?? "dark"}
+                        chartTheme={chartThemeId}
+                        showEquityCurve={visualSettings.showEquityCurve ?? true}
                       />
                     </Box>
                   )}
@@ -1369,7 +1373,8 @@ export const BacktestsPage = () => {
                   showTradeMarkers={visualSettings.showTradeMarkers ?? true}
                   showProjection={visualSettings.showProjection ?? true}
                   showVolume={visualSettings.showVolume ?? true}
-                  chartTheme={visualSettings.chartTheme ?? "dark"}
+                  chartTheme={chartThemeId}
+                  showEquityCurve={visualSettings.showEquityCurve ?? true}
                 />
               </Box>
             )}
@@ -1629,6 +1634,20 @@ export const BacktestsPage = () => {
                   <FormControlLabel
                     control={
                       <Switch
+                        checked={Boolean(visualSettings.showEquityCurve ?? true)}
+                        onChange={(e) =>
+                          setVisualSettings((prev) => ({
+                            ...prev,
+                            showEquityCurve: e.target.checked
+                          }))
+                        }
+                      />
+                    }
+                    label="Show equity curve"
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
                         checked={Boolean(visualSettings.showTradeMarkers ?? true)}
                         onChange={(e) =>
                           setVisualSettings((prev) => ({
@@ -1668,27 +1687,6 @@ export const BacktestsPage = () => {
                     }
                     label="Show volume histogram"
                   />
-                  <TextField
-                    select
-                    fullWidth
-                    margin="normal"
-                    label="Chart theme"
-                    value={visualSettings.chartTheme ?? "dark"}
-                    onChange={(e) =>
-                      setVisualSettings((prev) => ({
-                        ...prev,
-                        chartTheme: e.target.value as
-                          | "dark"
-                          | "light"
-                          | "highContrast"
-                      }))
-                    }
-                    helperText="Choose visual theme for the backtest chart"
-                  >
-                    <MenuItem value="dark">Dark</MenuItem>
-                    <MenuItem value="light">Light</MenuItem>
-                    <MenuItem value="highContrast">High contrast</MenuItem>
-                  </TextField>
                 </Box>
               )}
 

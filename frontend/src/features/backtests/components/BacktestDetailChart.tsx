@@ -7,6 +7,8 @@ import {
   LineStyle,
   createChart
 } from "lightweight-charts";
+import type { ChartThemeId } from "../../../chartThemes";
+import { CHART_THEME_CONFIG } from "../../../chartThemes";
 
 type BacktestChartPriceBar = {
   timestamp: string;
@@ -44,50 +46,8 @@ type BacktestDetailChartProps = {
   showTradeMarkers: boolean;
   showProjection: boolean;
   showVolume: boolean;
-  chartTheme?: "dark" | "light" | "highContrast";
-};
-
-type ChartTheme = "dark" | "light" | "highContrast";
-
-const THEME_CONFIG: Record<
-  ChartTheme,
-  {
-    priceBg: string;
-    gridColor: string;
-    textColor: string;
-    upColor: string;
-    downColor: string;
-    volumeUpColor: string;
-    volumeDownColor: string;
-  }
-> = {
-  dark: {
-    priceBg: "#121212",
-    gridColor: "#333",
-    textColor: "#e0e0e0",
-    upColor: "#26a69a",
-    downColor: "#ef5350",
-    volumeUpColor: "rgba(76, 175, 80, 0.4)",
-    volumeDownColor: "rgba(244, 67, 54, 0.4)"
-  },
-  light: {
-    priceBg: "#f5f5f5",
-    gridColor: "#d0d0d0",
-    textColor: "#212121",
-    upColor: "#2e7d32",
-    downColor: "#c62828",
-    volumeUpColor: "rgba(46, 125, 50, 0.4)",
-    volumeDownColor: "rgba(198, 40, 40, 0.4)"
-  },
-  highContrast: {
-    priceBg: "#000000",
-    gridColor: "#555555",
-    textColor: "#ffffff",
-    upColor: "#00e676",
-    downColor: "#ff1744",
-    volumeUpColor: "rgba(0, 230, 118, 0.5)",
-    volumeDownColor: "rgba(255, 23, 68, 0.5)"
-  }
+  chartTheme?: ChartThemeId;
+  showEquityCurve?: boolean;
 };
 
 const toUtcSeconds = (isoTimestamp: string): number =>
@@ -103,7 +63,8 @@ export const BacktestDetailChart = ({
   showTradeMarkers,
   showProjection,
   showVolume,
-  chartTheme = "dark"
+  chartTheme = "dark",
+  showEquityCurve = true
 }: BacktestDetailChartProps) => {
   const priceContainerRef = useRef<HTMLDivElement | null>(null);
   const equityContainerRef = useRef<HTMLDivElement | null>(null);
@@ -113,7 +74,7 @@ export const BacktestDetailChart = ({
       return;
     }
 
-    const theme = THEME_CONFIG[chartTheme] ?? THEME_CONFIG.dark;
+    const theme = CHART_THEME_CONFIG[chartTheme] ?? CHART_THEME_CONFIG.dark;
 
     // Normalise input series: sort by time and drop duplicate timestamps so
     // lightweight-charts always receives strictly increasing time values.
@@ -154,11 +115,19 @@ export const BacktestDetailChart = ({
       return out;
     };
 
-    const equityNorm = normaliseEquity(equityCurve);
-    const projectionNorm = normaliseEquity(projectionCurve);
+  const equityNorm = normaliseEquity(equityCurve);
+  const projectionNorm = normaliseEquity(projectionCurve);
 
-    const priceHeight = Math.round(height * 0.6);
-    const equityHeight = Math.max(height - priceHeight, 120);
+    // Allocate height between price and equity panes. When the equity curve and
+    // projection are both hidden, use the full height for the price chart.
+    let priceHeight = Math.round(height * 0.6);
+    let equityHeight = Math.max(height - priceHeight, 120);
+    const wantsEquityPane =
+      showEquityCurve || (showProjection && projectionNorm.length > 0);
+    if (!wantsEquityPane) {
+      priceHeight = height;
+      equityHeight = 0;
+    }
 
     const priceChart = createChart(priceContainerRef.current, {
       height: priceHeight,
@@ -222,6 +191,9 @@ export const BacktestDetailChart = ({
     }));
     candles.setData(candleData);
 
+    // Start with the full backtest window visible.
+    priceChart.timeScale().fitContent();
+
     // Zero Lag band overlays (if present in indicators).
     if (indicators) {
       const basis = indicators.zl_basis;
@@ -265,7 +237,7 @@ export const BacktestDetailChart = ({
       const volumeData: HistogramData[] = dedupedPriceBars.map((bar) => ({
         time: toUtcSeconds(bar.timestamp),
         value: bar.volume ?? 0,
-          color:
+        color:
           bar.close >= bar.open
             ? theme.volumeUpColor
             : theme.volumeDownColor
@@ -313,7 +285,7 @@ export const BacktestDetailChart = ({
 
     let equityChart: IChartApi | undefined;
 
-    if (equityContainerRef.current && equityNorm.length > 0) {
+    if (equityContainerRef.current && equityNorm.length > 0 && wantsEquityPane) {
       equityChart = createChart(equityContainerRef.current, {
         height: equityHeight,
         layout: {
@@ -332,15 +304,17 @@ export const BacktestDetailChart = ({
         }
       });
 
-      const eqSeries = equityChart.addLineSeries({
-        color: "#90caf9",
-        lineWidth: 2
-      });
-      const eqData: LineData[] = equityNorm.map((pt) => ({
-        time: toUtcSeconds(pt.timestamp),
-        value: pt.equity
-      }));
-      eqSeries.setData(eqData);
+      if (showEquityCurve) {
+        const eqSeries = equityChart.addLineSeries({
+          color: "#90caf9",
+          lineWidth: 2
+        });
+        const eqData: LineData[] = equityNorm.map((pt) => ({
+          time: toUtcSeconds(pt.timestamp),
+          value: pt.equity
+        }));
+        eqSeries.setData(eqData);
+      }
 
       if (showProjection && projectionNorm.length > 0) {
         const projSeries = equityChart.addLineSeries({
@@ -402,7 +376,8 @@ export const BacktestDetailChart = ({
     showTradeMarkers,
     showProjection,
     showVolume,
-    chartTheme
+    chartTheme,
+    showEquityCurve
   ]);
 
   return (

@@ -3,6 +3,7 @@ import DashboardIcon from "@mui/icons-material/Dashboard";
 import StorageIcon from "@mui/icons-material/Storage";
 import ScienceIcon from "@mui/icons-material/Science";
 import AssessmentIcon from "@mui/icons-material/Assessment";
+import PaletteIcon from "@mui/icons-material/Palette";
 import SettingsIcon from "@mui/icons-material/Settings";
 import {
   AppBar,
@@ -36,6 +37,7 @@ const navItems: NavItem[] = [
   { label: "Data", path: "/data", icon: <StorageIcon /> },
   { label: "Strategies", path: "/strategies", icon: <ScienceIcon /> },
   { label: "Backtests", path: "/backtests", icon: <AssessmentIcon /> },
+  { label: "Appearance", path: "/appearance", icon: <PaletteIcon /> },
   { label: "Settings", path: "/settings", icon: <SettingsIcon /> }
 ];
 
