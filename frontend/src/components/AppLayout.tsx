@@ -47,16 +47,29 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
   const handleDrawerToggle = () => {
-    setMobileOpen((prevState) => !prevState);
+    if (isMobile) {
+      setMobileOpen((prevState) => !prevState);
+    } else {
+      setCollapsed((prev) => !prev);
+    }
   };
 
   const drawer = (
     <Box sx={{ textAlign: "center" }}>
-      <Typography variant="h6" sx={{ my: 2 }}>
+      <Typography
+        variant="h6"
+        sx={{
+          my: 2,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis"
+        }}
+      >
         SigmaQLab
       </Typography>
       <List>
@@ -72,7 +85,7 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
             }}
           >
             <ListItemIcon>{item.icon}</ListItemIcon>
-            <ListItemText primary={item.label} />
+            {!collapsed && <ListItemText primary={item.label} />}
           </ListItemButton>
         ))}
       </List>
@@ -87,7 +100,7 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
             color="inherit"
             edge="start"
             onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { sm: "none" } }}
+            sx={{ mr: 2 }}
           >
             <MenuIcon />
           </IconButton>
@@ -98,7 +111,10 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
       </AppBar>
       <Box
         component="nav"
-        sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
+        sx={{
+          width: { sm: collapsed ? 64 : drawerWidth },
+          flexShrink: { sm: 0 }
+        }}
       >
         <Drawer
           variant={isMobile ? "temporary" : "permanent"}
@@ -111,7 +127,7 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
             display: { xs: "block", sm: "block" },
             "& .MuiDrawer-paper": {
               boxSizing: "border-box",
-              width: drawerWidth
+              width: collapsed ? 64 : drawerWidth
             }
           }}
         >

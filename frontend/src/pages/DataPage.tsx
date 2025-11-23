@@ -612,8 +612,14 @@ export const DataPage = () => {
       </Typography>
       <Grid container spacing={3}>
         <Grid item xs={12} md={5}>
-          <Card>
-            <CardContent>
+          <Card
+            sx={{
+              height: 460,
+              display: "flex",
+              flexDirection: "column"
+            }}
+          >
+            <CardContent sx={{ flex: 1 }}>
               <Typography variant="h6" gutterBottom>
                 Fetch Data
               </Typography>
@@ -717,8 +723,21 @@ export const DataPage = () => {
           </Card>
         </Grid>
         <Grid item xs={12} md={7}>
-          <Card>
-            <CardContent>
+          <Card
+            sx={{
+              height: 460,
+              display: "flex",
+              flexDirection: "column"
+            }}
+          >
+            <CardContent
+              sx={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0
+              }}
+            >
               <Box
                 sx={{
                   display: "flex",
@@ -753,58 +772,70 @@ export const DataPage = () => {
                   No data yet. Fetch some bars to see coverage.
                 </Typography>
               ) : (
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell padding="checkbox" />
-                      <TableCell>ID</TableCell>
-                      <TableCell>Symbol</TableCell>
-                      <TableCell>Exchange</TableCell>
-                      <TableCell>Timeframe</TableCell>
-                      <TableCell>Source</TableCell>
-                      <TableCell>Start</TableCell>
-                      <TableCell>End</TableCell>
-                      <TableCell align="right">Bars</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {summary.map((row) => {
-                      const key = row.coverage_id;
-                      const checked = selectedRows.has(key);
-                      return (
-                        <TableRow
-                          key={key}
-                          hover
-                          onClick={() => handleSelectSummaryRow(row)}
-                          sx={{ cursor: "pointer" }}
-                        >
-                          <TableCell padding="checkbox">
-                            <Checkbox
-                              size="small"
-                              checked={checked}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                handleToggleRowSelection(row);
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell>{row.coverage_id}</TableCell>
-                          <TableCell>{row.symbol}</TableCell>
-                          <TableCell>{row.exchange ?? ""}</TableCell>
-                          <TableCell>{row.timeframe}</TableCell>
-                          <TableCell>{row.source ?? ""}</TableCell>
-                          <TableCell>
-                            {new Date(row.start_timestamp).toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            {new Date(row.end_timestamp).toLocaleString()}
-                          </TableCell>
-                          <TableCell align="right">{row.bar_count}</TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                <Box
+                  sx={{
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: "auto"
+                  }}
+                >
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell padding="checkbox" />
+                        <TableCell>ID</TableCell>
+                        <TableCell>Symbol</TableCell>
+                        <TableCell>Exchange</TableCell>
+                        <TableCell>Timeframe</TableCell>
+                        <TableCell>Source</TableCell>
+                        <TableCell>Start</TableCell>
+                        <TableCell>End</TableCell>
+                        <TableCell align="right">Bars</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {summary.map((row) => {
+                        const key = row.coverage_id;
+                        const checked = selectedRows.has(key);
+                        return (
+                          <TableRow
+                            key={key}
+                            hover
+                            onClick={() => handleSelectSummaryRow(row)}
+                            sx={{ cursor: "pointer" }}
+                          >
+                            <TableCell padding="checkbox">
+                              <Checkbox
+                                size="small"
+                                checked={checked}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleRowSelection(row);
+                                }}
+                              />
+                            </TableCell>
+                            <TableCell>{row.coverage_id}</TableCell>
+                            <TableCell>{row.symbol}</TableCell>
+                            <TableCell>{row.exchange ?? ""}</TableCell>
+                            <TableCell>{row.timeframe}</TableCell>
+                            <TableCell>{row.source ?? ""}</TableCell>
+                            <TableCell>
+                              {new Date(row.start_timestamp).toLocaleString("en-IN", {
+                                timeZone: "Asia/Kolkata"
+                              })}
+                            </TableCell>
+                            <TableCell>
+                              {new Date(row.end_timestamp).toLocaleString("en-IN", {
+                                timeZone: "Asia/Kolkata"
+                              })}
+                            </TableCell>
+                            <TableCell align="right">{row.bar_count}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </Box>
               )}
               {deleteMessage && (
                 <Typography
