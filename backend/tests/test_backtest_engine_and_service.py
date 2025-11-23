@@ -49,6 +49,8 @@ def test_backtrader_engine_runs_on_synthetic_data() -> None:
         timeframe="1d",
         initial_capital=100_000.0,
         params={"fast": 5, "slow": 20},
+        risk_config=None,
+        costs_config=None,
     )
 
     engine_instance = BacktraderEngine()

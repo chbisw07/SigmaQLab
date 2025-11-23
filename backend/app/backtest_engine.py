@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -21,6 +21,11 @@ class BacktestConfig:
     timeframe: str
     initial_capital: float
     params: Dict[str, Any]
+    # Optional configs passed through from the API layer so the engine can
+    # respect risk and broker settings (e.g. allowShortSelling,
+    # productType=intraday/delivery).
+    risk_config: Dict[str, Any] | None = None
+    costs_config: Dict[str, Any] | None = None
 
 
 @dataclass
@@ -72,6 +77,12 @@ if bt is not None:
     class SigmaBaseStrategy(bt.Strategy):  # type: ignore[misc]
         """Base Backtrader strategy that records equity and trades."""
 
+        params = dict(
+            broker_product_type="auto",  # intraday, delivery, auto
+            allow_short=True,
+            session_close_time="15:15",
+        )
+
         def __init__(self) -> None:
             super().__init__()
             self._equity_curve: List[EquityPoint] = []
@@ -86,6 +97,59 @@ if bt is not None:
             # placing orders so we can attach human-readable reasons to trades.
             self._pending_entry_reason: str | None = None
             self._pending_exit_reason: str | None = None
+            # When broker constraints force a square-off, we remember the logical
+            # exit timestamp here so trades can be stamped with the intended
+            # EOD close, not the next-bar fill time.
+            self._forced_exit_timestamp: datetime | None = None
+
+            # Broker/risk constraints derived from strategy params. These are
+            # populated by BacktraderEngine based on BacktestConfig.
+            self._product_type: str = str(self.p.broker_product_type).lower()
+            self._allow_short: bool = bool(self.p.allow_short)
+            close_cfg = self.p.session_close_time
+            self._session_close_time: time | None
+            if isinstance(close_cfg, str):
+                try:
+                    hour_str, minute_str = close_cfg.split(":")
+                    self._session_close_time = datetime.strptime(
+                        f"{hour_str}:{minute_str}", "%H:%M"
+                    ).time()
+                except ValueError:
+                    self._session_close_time = datetime.strptime(
+                        "15:15", "%H:%M"
+                    ).time()
+            else:
+                self._session_close_time = close_cfg
+
+        # Helper to enforce broker constraints such as intraday square-off and
+        # disallowing overnight shorts in the cash segment.
+        def _enforce_broker_constraints(self) -> None:
+            if self.position.size == 0 or self._session_close_time is None:
+                return
+
+            dt = self.data.datetime.datetime(0)
+            current_time = dt.time()
+
+            is_short = self.position.size < 0
+            is_intraday_product = self._product_type == "intraday"
+
+            # Close positions that cannot be held overnight:
+            # - Any position when product=intraday (MIS).
+            # - Any short position in cash-equity, regardless of product.
+            if current_time >= self._session_close_time and (
+                is_intraday_product or is_short
+            ):
+                if is_intraday_product and is_short:
+                    reason = "intraday square-off (MIS short)"
+                elif is_intraday_product:
+                    reason = "intraday square-off (MIS long)"
+                elif is_short:
+                    reason = "intraday square-off for short in cash segment"
+                else:
+                    reason = "intraday square-off"
+                self._pending_exit_reason = reason
+                self._forced_exit_timestamp = dt
+                self.close()
 
         def next(self) -> None:  # type: ignore[override]
             # Record equity on every bar.
@@ -142,7 +206,15 @@ if bt is not None:
                 return
 
             side = "long" if size > 0 else "short"
-            exit_dt = trade.data.datetime.datetime(0)
+            # Use a forced timestamp when broker constraints initiated the
+            # square-off; otherwise fall back to the bar time when Backtrader
+            # reports the trade as closed.
+            exit_dt = (
+                self._forced_exit_timestamp
+                if self._forced_exit_timestamp is not None
+                else trade.data.datetime.datetime(0)
+            )
+            self._forced_exit_timestamp = None
 
             exit_reason = self._pending_exit_reason
             self._pending_exit_reason = None
@@ -184,7 +256,16 @@ if bt is not None:
                 # Close existing long / open short on bearish crossover.
                 self._pending_exit_reason = "signal: SMA fast crosses below slow"
                 self._pending_entry_reason = "signal: SMA fast crosses below slow"
-                self.sell()
+                if self._allow_short:
+                    self.sell()
+                else:
+                    # If shorting is disabled, only close existing long.
+                    if self.position.size > 0:
+                        self.close()
+
+            # Apply broker constraints (e.g. intraday square-off) after strategy
+            # logic for this bar has run.
+            self._enforce_broker_constraints()
 
     class ZeroLagTrendMtfStrategy(SigmaBaseStrategy):
         """Zero Lag Trend Strategy (single timeframe version, MTF diagnostics later)."""
@@ -329,9 +410,15 @@ if bt is not None:
                 if self.position.size > 0:
                     self._pending_exit_reason = "trend reversal to short"
                     self.close()
-                if self.position.size > -int(self.p.pyramid_limit):
+                if self._allow_short and self.position.size > -int(
+                    self.p.pyramid_limit
+                ):
                     self._pending_entry_reason = "trend down entry"
                     self.sell()
+
+            # Apply broker constraints (e.g. intraday square-off) after strategy
+            # logic for this bar has run.
+            self._enforce_broker_constraints()
 
 else:  # pragma: no cover - used only when backtrader missing
 
@@ -385,8 +472,26 @@ class BacktraderEngine:
 
         strat_cls = STRATEGY_REGISTRY[config.strategy_code]
 
-        # Apply params to strategy.
-        cerebro.addstrategy(strat_cls, **config.params)
+        # Derive broker constraints from BacktestConfig so strategies can
+        # enforce broker rules consistently (e.g. intraday square-off, whether
+        # shorts are allowed).
+        risk_cfg = config.risk_config or {}
+        costs_cfg = config.costs_config or {}
+        broker_product = str(
+            costs_cfg.get("productType") or costs_cfg.get("product") or "auto"
+        ).lower()
+        allow_short = bool(risk_cfg.get("allowShortSelling", True))
+
+        broker_params = {
+            "broker_product_type": broker_product,
+            "allow_short": allow_short,
+            # For now we assume the standard India cash session and square-off
+            # intraday products at 15:15 IST.
+            "session_close_time": "15:15",
+        }
+
+        # Apply params to strategy, including broker constraints.
+        cerebro.addstrategy(strat_cls, **config.params, **broker_params)
 
         data_feed = bt.feeds.PandasData(
             dataname=price_data,

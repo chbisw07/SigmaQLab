@@ -139,6 +139,8 @@ class BacktestService:
             timeframe=timeframe,
             initial_capital=initial_capital,
             params=resolved_params,
+            risk_config=risk_config,
+            costs_config=costs_config,
         )
         result = self._engine.run(cfg, df)
 
@@ -227,7 +229,10 @@ class BacktestService:
             meta_db.add_all(equity_rows)
 
         # Persist trades, including per-trade metrics derived from the price
-        # series (e.g. holding period and what-if projections).
+        # series (e.g. holding period and what-if projections). When storing
+        # exit_price, we prefer the close from the OHLCV series at the
+        # exit_timestamp so that the UI shows a value consistent with the
+        # chart, even if Backtrader's internal fills occurred intrabar.
         if isinstance(trades_with_costs, list) and trades_with_costs:
             trade_rows: List[BacktestTrade] = []
 
@@ -270,6 +275,20 @@ class BacktestService:
                         max_theoretical_pnl_pct = max_theoretical_pnl / notional
                         pnl_capture_ratio = trade.pnl / max_theoretical_pnl
 
+                # Align exit_price with the charted close at (or just before)
+                # the recorded exit_timestamp so that the trades table and
+                # price chart remain visually consistent.
+                exit_price_chart = trade.exit_price
+                if trade.exit_timestamp in closes.index:
+                    exit_price_chart = float(closes.loc[trade.exit_timestamp])
+                else:
+                    # Find the last bar at or before the exit timestamp.
+                    idx = closes.index.searchsorted(trade.exit_timestamp)
+                    if idx == 0:
+                        exit_price_chart = float(closes.iloc[0])
+                    else:
+                        exit_price_chart = float(closes.iloc[idx - 1])
+
                 trade_rows.append(
                     BacktestTrade(
                         backtest_id=backtest.id,
@@ -279,7 +298,7 @@ class BacktestService:
                         entry_timestamp=trade.entry_timestamp,
                         entry_price=trade.entry_price,
                         exit_timestamp=trade.exit_timestamp,
-                        exit_price=trade.exit_price,
+                        exit_price=exit_price_chart,
                         pnl=trade.pnl,
                         pnl_pct=pnl_pct,
                         holding_period_bars=holding_period_bars,
@@ -341,11 +360,11 @@ class BacktestService:
 
             - If explicit productType is 'intraday' -> intraday.
             - If explicit productType is 'delivery' -> delivery.
-            - If auto:
-              - Short trades are treated as intraday (shorting cash overnight
-                is generally not allowed).
-              - Long trades are intraday when entry and exit on same day;
-                otherwise delivery.
+            - If auto/default:
+              - Any trade whose entry and exit are on the same calendar day is
+                treated as intraday.
+              - Any trade that spans days is treated as delivery, regardless of
+                side.
             """
 
             entry_date = t.entry_timestamp.date()
@@ -355,9 +374,6 @@ class BacktestService:
                 return "intraday"
             if product_type == "delivery":
                 return "delivery"
-
-            if t.side == "short":
-                return "intraday"
 
             return "intraday" if entry_date == exit_date else "delivery"
 
@@ -465,8 +481,29 @@ class BacktestService:
             total_costs += cost
             per_trade_costs.append((t.exit_timestamp, cost))
 
+            # Order type reflects the broker product:
+            # - intraday trades -> MIS
+            # - multi-day trades -> CNC
             entry_order_type = "MIS" if kind == "intraday" else "CNC"
             exit_order_type = entry_order_type
+
+            entry_reason = t.entry_reason
+            exit_reason = t.exit_reason
+
+            # Flag trades that violate common Indian cash-equity constraints,
+            # such as overnight shorts / CNC shorts, so that strategy authors
+            # can see where broker rules would have intervened.
+            if (
+                kind == "delivery"
+                and t.side == "short"
+                and t.entry_timestamp.date() != t.exit_timestamp.date()
+            ):
+                note = (
+                    "overnight short in cash segment using CNC; not allowed by "
+                    "broker, treated as delivery for costs"
+                )
+                entry_reason = f"{note}; {entry_reason}" if entry_reason else note
+                exit_reason = f"{note}; {exit_reason}" if exit_reason else note
 
             trades_net.append(
                 TradeRecord(
@@ -482,8 +519,8 @@ class BacktestService:
                     exit_order_type=exit_order_type,
                     entry_brokerage=entry_cost,
                     exit_brokerage=exit_cost,
-                    entry_reason=t.entry_reason,
-                    exit_reason=t.exit_reason,
+                    entry_reason=entry_reason,
+                    exit_reason=exit_reason,
                 )
             )
 
