@@ -53,6 +53,9 @@ type RiskConfig = {
 };
 
 type CostsConfig = {
+  broker?: string | null;
+  productType?: "auto" | "intraday" | "delivery" | null;
+  segment?: "equity" | "fno" | string | null;
   commissionType?: "flat" | "percent" | null;
   commissionValue?: number | null;
   slippagePerShare?: number | null;
@@ -108,6 +111,12 @@ type Trade = {
   max_theoretical_pnl?: number | null;
   max_theoretical_pnl_pct?: number | null;
   pnl_capture_ratio?: number | null;
+  entry_order_type?: string | null;
+  exit_order_type?: string | null;
+  entry_brokerage?: number | null;
+  exit_brokerage?: number | null;
+  entry_reason?: string | null;
+  exit_reason?: string | null;
 };
 
 type BacktestChartPriceBar = {
@@ -250,7 +259,11 @@ export const BacktestsPage = () => {
     setPriceSource("kite");
     setOverrideJson("");
     setRunRiskConfig({});
-    setRunCostsConfig({});
+    setRunCostsConfig({
+      broker: "zerodha",
+      segment: "equity",
+      productType: "auto"
+    });
     setAdvancedTab("inputs");
     setRunState("idle");
     setRunMessage(null);
@@ -1268,13 +1281,30 @@ export const BacktestsPage = () => {
                       />
                     </Box>
                   )}
+                </Grid>
 
+                <Grid item xs={12}>
                   <Box mt={3}>
                     <Typography variant="subtitle2" gutterBottom>
                       Trades
                     </Typography>
-                    <Box mb={1}>
-                      <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                    <Box
+                      mb={1}
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 1
+                      }}
+                    >
+                      <Box>
+                        <Typography variant="body2" color="textSecondary">
+                          Executed trades for this backtest (net of costs, where
+                          configured).
+                        </Typography>
+                      </Box>
+                      <Box sx={{ display: "flex", gap: 1 }}>
                         <Button
                           size="small"
                           variant="outlined"
@@ -1313,8 +1343,14 @@ export const BacktestsPage = () => {
                             <TableCell align="right">Size</TableCell>
                             <TableCell>Entry</TableCell>
                             <TableCell align="right">Entry price</TableCell>
+                            <TableCell>Entry type</TableCell>
+                            <TableCell align="right">Entry brokerage</TableCell>
+                            <TableCell>Entry reason</TableCell>
                             <TableCell>Exit</TableCell>
                             <TableCell align="right">Exit price</TableCell>
+                            <TableCell>Exit type</TableCell>
+                            <TableCell align="right">Exit brokerage</TableCell>
+                            <TableCell>Exit reason</TableCell>
                             <TableCell align="right">PnL</TableCell>
                             <TableCell align="right">PnL %</TableCell>
                             <TableCell align="right">Equity</TableCell>
@@ -1339,11 +1375,29 @@ export const BacktestsPage = () => {
                                 {t.entry_price.toFixed(2)}
                               </TableCell>
                               <TableCell>
+                                {t.entry_order_type ?? ""}
+                              </TableCell>
+                              <TableCell align="right">
+                                {typeof t.entry_brokerage === "number"
+                                  ? t.entry_brokerage.toFixed(2)
+                                  : ""}
+                              </TableCell>
+                              <TableCell>{t.entry_reason ?? ""}</TableCell>
+                              <TableCell>
                                 {formatDateTime(t.exit_timestamp)}
                               </TableCell>
                               <TableCell align="right">
                                 {t.exit_price.toFixed(2)}
                               </TableCell>
+                              <TableCell>
+                                {t.exit_order_type ?? ""}
+                              </TableCell>
+                              <TableCell align="right">
+                                {typeof t.exit_brokerage === "number"
+                                  ? t.exit_brokerage.toFixed(2)
+                                  : ""}
+                              </TableCell>
+                              <TableCell>{t.exit_reason ?? ""}</TableCell>
                               <TableCell align="right">
                                 {t.pnl.toFixed(2)}
                               </TableCell>
@@ -1567,80 +1621,46 @@ export const BacktestsPage = () => {
             {advancedTab === "costs" && (
               <Box>
                 <Typography variant="subtitle2" gutterBottom>
-                  Costs & fees (applied to this run)
+                  Costs &amp; fees (Indian equity – Zerodha)
                 </Typography>
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Broker"
+                  value={runCostsConfig.broker ?? "zerodha"}
+                  InputProps={{ readOnly: true }}
+                  helperText="Brokerage and statutory charges modelled approximately as per Zerodha equity cash."
+                />
                 <TextField
                   select
                   fullWidth
                   margin="normal"
-                  label="Commission type"
-                  value={runCostsConfig.commissionType ?? ""}
+                  label="Product type"
+                  value={runCostsConfig.productType ?? "auto"}
                   onChange={(e) =>
                     setRunCostsConfig((prev) => ({
                       ...prev,
-                      commissionType:
-                        (e.target.value as "flat" | "percent" | "") || null
+                      broker: "zerodha",
+                      segment: "equity",
+                      productType: e.target.value as
+                        | "auto"
+                        | "intraday"
+                        | "delivery"
                     }))
                   }
+                  helperText="Auto: classify each trade as intraday or delivery based on holding period (short trades treated as intraday)."
                 >
-                  <MenuItem value="">None</MenuItem>
-                  <MenuItem value="flat">Flat per trade</MenuItem>
-                  <MenuItem value="percent">Percent of notional</MenuItem>
+                  <MenuItem value="auto">Auto (infer from trades)</MenuItem>
+                  <MenuItem value="intraday">Intraday (MIS)</MenuItem>
+                  <MenuItem value="delivery">Delivery (CNC)</MenuItem>
                 </TextField>
-                <TextField
-                  fullWidth
-                  margin="normal"
-                  label="Commission value"
-                  type="number"
-                  value={runCostsConfig.commissionValue ?? ""}
-                  onChange={(e) =>
-                    setRunCostsConfig((prev) => ({
-                      ...prev,
-                      commissionValue:
-                        e.target.value === ""
-                          ? null
-                          : Number.parseFloat(e.target.value)
-                    }))
-                  }
-                />
-                <Grid container spacing={2}>
-                  <Grid item xs={6}>
-                    <TextField
-                      fullWidth
-                      margin="normal"
-                      label="Slippage per share"
-                      type="number"
-                      value={runCostsConfig.slippagePerShare ?? ""}
-                      onChange={(e) =>
-                        setRunCostsConfig((prev) => ({
-                          ...prev,
-                          slippagePerShare:
-                            e.target.value === ""
-                              ? null
-                              : Number.parseFloat(e.target.value)
-                        }))
-                      }
-                    />
-                  </Grid>
-                  <Grid item xs={6}>
-                    <TextField
-                      fullWidth
-                      margin="normal"
-                      label="Other charges (%)"
-                      type="number"
-                      value={runCostsConfig.otherChargesPct ?? ""}
-                      onChange={(e) =>
-                        setRunCostsConfig((prev) => ({
-                          ...prev,
-                          otherChargesPct:
-                            e.target.value === ""
-                              ? null
-                              : Number.parseFloat(e.target.value)
-                        }))
-                      }
-                    />
-                  </Grid>
-                </Grid>
+                <Typography variant="body2" color="textSecondary" mt={1}>
+                  Intraday: 0.03% or ₹20 per executed order (whichever is
+                  lower), STT on sell side, exchange/SEBI charges, GST and stamp
+                  duty on buy side. Delivery: zero brokerage, STT on buy and
+                  sell, plus the same statutory charges. All values are
+                  approximations for backtesting only.
+                </Typography>
               </Box>
             )}
 

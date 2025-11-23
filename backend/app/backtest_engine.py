@@ -43,6 +43,16 @@ class TradeRecord:
     exit_timestamp: datetime
     exit_price: float
     pnl: float
+    # Optional cost metadata; populated when a broker-specific cost model
+    # (e.g. Zerodha equity) is applied.
+    entry_order_type: str | None = None  # e.g. MIS / CNC
+    exit_order_type: str | None = None
+    entry_brokerage: float | None = None
+    exit_brokerage: float | None = None
+    # Optional human-readable reasons for this trade, used for diagnostics in
+    # the UI (e.g. signal triggered, stop-loss hit, end-of-test flatten).
+    entry_reason: str | None = None
+    exit_reason: str | None = None
 
 
 @dataclass
@@ -70,8 +80,12 @@ if bt is not None:
             self._sigma_trades: List[TradeRecord] = []
             # Track open trades by Backtrader trade reference so that we can
             # reconstruct entry information when the trade is later closed.
-            # Mapping: trade_ref -> (size, entry_timestamp, entry_price)
-            self._open_trades: Dict[int, tuple[float, datetime, float]] = {}
+            # Mapping: trade_ref -> (size, entry_timestamp, entry_price, entry_reason)
+            self._open_trades: Dict[int, tuple[float, datetime, float, str | None]] = {}
+            # Optional annotations set by concrete strategies immediately before
+            # placing orders so we can attach human-readable reasons to trades.
+            self._pending_entry_reason: str | None = None
+            self._pending_exit_reason: str | None = None
 
         def next(self) -> None:  # type: ignore[override]
             # Record equity on every bar.
@@ -92,6 +106,7 @@ if bt is not None:
             # via `notify_trade`. This is similar to how many backtest engines
             # implicitly close positions at the end of the test window.
             if self.position.size != 0:
+                self._pending_exit_reason = "end of backtest window"
                 self.close()
             # Call the base implementation last in case future versions add
             # behaviour there.
@@ -109,7 +124,9 @@ if bt is not None:
                     return
                 entry_dt = trade.data.datetime.datetime(0)
                 entry_price = float(trade.price)
-                self._open_trades[ref] = (size, entry_dt, entry_price)
+                entry_reason = self._pending_entry_reason
+                self._pending_entry_reason = None
+                self._open_trades[ref] = (size, entry_dt, entry_price, entry_reason)
                 return
 
             # For closed trades, recover the original size and entry
@@ -120,12 +137,15 @@ if bt is not None:
                 # skip recording rather than guessing.
                 return
 
-            size, entry_dt, entry_price = info
+            size, entry_dt, entry_price, entry_reason = info
             if size == 0.0:
                 return
 
             side = "long" if size > 0 else "short"
             exit_dt = trade.data.datetime.datetime(0)
+
+            exit_reason = self._pending_exit_reason
+            self._pending_exit_reason = None
 
             record = TradeRecord(
                 symbol=self.data._name or "",  # type: ignore[attr-defined]
@@ -136,6 +156,8 @@ if bt is not None:
                 exit_timestamp=exit_dt,
                 exit_price=float(trade.price),
                 pnl=float(trade.pnlcomm),
+                entry_reason=entry_reason,
+                exit_reason=exit_reason,
             )
             self._sigma_trades.append(record)
 
@@ -155,8 +177,13 @@ if bt is not None:
 
             if not self.position:
                 if self.crossover > 0:
+                    # New long position on bullish crossover.
+                    self._pending_entry_reason = "signal: SMA fast crosses above slow"
                     self.buy()
             elif self.crossover < 0:
+                # Close existing long / open short on bearish crossover.
+                self._pending_exit_reason = "signal: SMA fast crosses below slow"
+                self._pending_entry_reason = "signal: SMA fast crosses below slow"
                 self.sell()
 
     class ZeroLagTrendMtfStrategy(SigmaBaseStrategy):
@@ -271,8 +298,10 @@ if bt is not None:
                 low = float(self.data.low[0])
                 high = float(self.data.high[0])
                 if low <= stop:
+                    self._pending_exit_reason = "stop-loss hit (long)"
                     self.close()
                 elif high >= target:
+                    self._pending_exit_reason = "take-profit hit (long)"
                     self.close()
             elif self.position.size < 0:
                 entry = float(self.position.price)
@@ -281,21 +310,27 @@ if bt is not None:
                 high = float(self.data.high[0])
                 low = float(self.data.low[0])
                 if high >= stop:
+                    self._pending_exit_reason = "stop-loss hit (short)"
                     self.close()
                 elif low <= target:
+                    self._pending_exit_reason = "take-profit hit (short)"
                     self.close()
 
             # Entry logic on trend reversals.
             if bull_reversal:
                 if self.position.size < 0:
+                    self._pending_exit_reason = "trend reversal to long"
                     self.close()
                 if self.position.size < int(self.p.pyramid_limit):
+                    self._pending_entry_reason = "trend up entry"
                     self.buy()
 
             if bear_reversal and not bool(self.p.take_long_only):
                 if self.position.size > 0:
+                    self._pending_exit_reason = "trend reversal to short"
                     self.close()
                 if self.position.size > -int(self.p.pyramid_limit):
+                    self._pending_entry_reason = "trend down entry"
                     self.sell()
 
 else:  # pragma: no cover - used only when backtrader missing

@@ -295,6 +295,12 @@ class BacktestTradeRead(BaseModel):
     max_theoretical_pnl: float | None = None
     max_theoretical_pnl_pct: float | None = None
     pnl_capture_ratio: float | None = None
+    entry_order_type: str | None = None
+    exit_order_type: str | None = None
+    entry_brokerage: float | None = None
+    exit_brokerage: float | None = None
+    entry_reason: str | None = None
+    exit_reason: str | None = None
 
     model_config = SettingsConfigDict(from_attributes=True)
 

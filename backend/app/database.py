@@ -66,7 +66,8 @@ def ensure_meta_schema_migrations() -> None:
                     conn.execute(text(f"ALTER TABLE backtests ADD COLUMN {name} {ddl}"))
                 conn.commit()
 
-    # Backtest trades: per-trade derived metrics.
+    # Backtest trades: per-trade derived metrics, optional Indian-equity
+    # cost metadata, and human-readable reasons.
     if "backtest_trades" in tables:
         columns = {col["name"] for col in inspector.get_columns("backtest_trades")}
         new_cols = {
@@ -75,6 +76,12 @@ def ensure_meta_schema_migrations() -> None:
             "max_theoretical_pnl": "FLOAT",
             "max_theoretical_pnl_pct": "FLOAT",
             "pnl_capture_ratio": "FLOAT",
+            "entry_order_type": "VARCHAR",
+            "exit_order_type": "VARCHAR",
+            "entry_brokerage": "FLOAT",
+            "exit_brokerage": "FLOAT",
+            "entry_reason": "VARCHAR",
+            "exit_reason": "VARCHAR",
         }
         missing = {name: ddl for name, ddl in new_cols.items() if name not in columns}
         if missing:

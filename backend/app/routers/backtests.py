@@ -414,6 +414,12 @@ async def export_backtest_trades_csv(
             "max_theoretical_pnl",
             "max_theoretical_pnl_pct",
             "pnl_capture_ratio",
+            "entry_order_type",
+            "exit_order_type",
+            "entry_brokerage",
+            "exit_brokerage",
+            "entry_reason",
+            "exit_reason",
         ]
     )
     for t in trades:
@@ -433,6 +439,12 @@ async def export_backtest_trades_csv(
                 t.max_theoretical_pnl,
                 t.max_theoretical_pnl_pct,
                 t.pnl_capture_ratio,
+                t.entry_order_type,
+                t.exit_order_type,
+                t.entry_brokerage,
+                t.exit_brokerage,
+                t.entry_reason,
+                t.exit_reason,
             ]
         )
 

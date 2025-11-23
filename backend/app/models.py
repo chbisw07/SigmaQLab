@@ -125,5 +125,13 @@ class BacktestTrade(Base):
     max_theoretical_pnl = Column(Float, nullable=True)
     max_theoretical_pnl_pct = Column(Float, nullable=True)
     pnl_capture_ratio = Column(Float, nullable=True)
+    # Optional Indian-equity specific metadata when a Zerodha-style cost model
+    # is applied.
+    entry_order_type = Column(String, nullable=True)  # e.g. MIS / CNC
+    exit_order_type = Column(String, nullable=True)
+    entry_brokerage = Column(Float, nullable=True)
+    exit_brokerage = Column(Float, nullable=True)
+    entry_reason = Column(String, nullable=True)
+    exit_reason = Column(String, nullable=True)
 
     backtest = relationship("Backtest", backref="trades")

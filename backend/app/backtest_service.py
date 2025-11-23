@@ -142,15 +142,52 @@ class BacktestService:
         )
         result = self._engine.run(cfg, df)
 
-        # Derive richer metrics from equity curve and trades.
+        # Apply transactional costs if a costs_config has been provided. This
+        # will adjust per-trade PnL and the equity curve so that downstream
+        # metrics are computed on a net-of-cost basis where possible.
+        equity_curve_with_costs = result.equity_curve
+        trades_with_costs = result.trades
+        gross_final_value = float(result.metrics.get("final_value", initial_capital))
+        gross_pnl = float(
+            result.metrics.get("pnl", gross_final_value - initial_capital)
+        )
+        total_costs = 0.0
+
+        if costs_config and result.trades and result.equity_curve:
+            (
+                equity_curve_with_costs,
+                trades_with_costs,
+                total_costs,
+            ) = self._apply_costs_indian_equity(
+                equity_curve=result.equity_curve,
+                trades=result.trades,
+                costs_config=costs_config,
+            )
+
+        # Derive richer metrics from (possibly adjusted) equity curve and trades.
         metrics: Dict[str, float] = dict(result.metrics)
+
+        # Preserve gross figures explicitly so callers can compare if needed.
+        metrics["gross_final_value"] = gross_final_value
+        metrics["gross_pnl"] = gross_pnl
+        metrics["total_costs"] = total_costs
+
+        if total_costs > 0.0:
+            net_final_value = gross_final_value - total_costs
+            net_pnl = gross_pnl - total_costs
+            metrics["final_value"] = net_final_value
+            metrics["pnl"] = net_pnl
+            metrics["pnl_net"] = net_pnl
+        else:
+            metrics["pnl_net"] = gross_pnl
+
         metrics.update(
             self._compute_equity_metrics(
-                result.equity_curve,
+                equity_curve_with_costs,
                 timeframe=timeframe,
             )
         )
-        metrics.update(self._compute_trade_metrics(result.trades))
+        metrics.update(self._compute_trade_metrics(trades_with_costs))
 
         backtest = Backtest(
             strategy_id=strategy.id,
@@ -177,25 +214,25 @@ class BacktestService:
         meta_db.refresh(backtest)
 
         # Persist equity curve points.
-        if isinstance(result.equity_curve, list) and result.equity_curve:
+        if isinstance(equity_curve_with_costs, list) and equity_curve_with_costs:
             equity_rows: List[BacktestEquityPoint] = [
                 BacktestEquityPoint(
                     backtest_id=backtest.id,
                     timestamp=pt.timestamp,
                     equity=pt.equity,
                 )
-                for pt in result.equity_curve
+                for pt in equity_curve_with_costs
                 if isinstance(pt, EquityPoint)
             ]
             meta_db.add_all(equity_rows)
 
         # Persist trades, including per-trade metrics derived from the price
         # series (e.g. holding period and what-if projections).
-        if isinstance(result.trades, list) and result.trades:
+        if isinstance(trades_with_costs, list) and trades_with_costs:
             trade_rows: List[BacktestTrade] = []
 
             closes = df["close"]
-            for trade in result.trades:
+            for trade in trades_with_costs:
                 if not isinstance(trade, TradeRecord):
                     continue
 
@@ -249,6 +286,12 @@ class BacktestService:
                         max_theoretical_pnl=max_theoretical_pnl,
                         max_theoretical_pnl_pct=max_theoretical_pnl_pct,
                         pnl_capture_ratio=pnl_capture_ratio,
+                        entry_order_type=trade.entry_order_type,
+                        exit_order_type=trade.exit_order_type,
+                        entry_brokerage=trade.entry_brokerage,
+                        exit_brokerage=trade.exit_brokerage,
+                        entry_reason=trade.entry_reason,
+                        exit_reason=trade.exit_reason,
                     )
                 )
 
@@ -258,6 +301,212 @@ class BacktestService:
         meta_db.commit()
 
         return backtest
+
+    def _apply_costs_indian_equity(
+        self,
+        *,
+        equity_curve: List[EquityPoint],
+        trades: List[TradeRecord],
+        costs_config: Dict[str, Any],
+    ) -> tuple[List[EquityPoint], List[TradeRecord], float]:
+        """Apply an approximate Indian equity cost model (Zerodha style).
+
+        The goal is to capture the dominant components of trading costs for
+        NSE/BSE cash equities:
+
+        - Brokerage:
+          - Delivery (CNC): zero brokerage.
+          - Intraday (MIS): 0.03% or Rs. 20 per executed order, whichever lower.
+        - STT/CTT, exchange transaction charges, SEBI, stamp duty, GST.
+
+        We intentionally keep the model simple and slightly conservative rather
+        than re-implementing every corner case. All numbers are approximate
+        and may diverge slightly from live contract notes.
+        """
+
+        if not equity_curve or not trades:
+            return equity_curve, trades, 0.0
+
+        broker = str(costs_config.get("broker") or "").lower()
+        if broker and broker != "zerodha":
+            # Only a Zerodha-equity model is implemented for now.
+            return equity_curve, trades, 0.0
+
+        product_type = str(
+            costs_config.get("productType") or costs_config.get("product") or "auto"
+        ).lower()
+
+        def classify_trade(t: TradeRecord) -> str:
+            """Return 'intraday' or 'delivery' for this trade.
+
+            - If explicit productType is 'intraday' -> intraday.
+            - If explicit productType is 'delivery' -> delivery.
+            - If auto:
+              - Short trades are treated as intraday (shorting cash overnight
+                is generally not allowed).
+              - Long trades are intraday when entry and exit on same day;
+                otherwise delivery.
+            """
+
+            entry_date = t.entry_timestamp.date()
+            exit_date = t.exit_timestamp.date()
+
+            if product_type == "intraday":
+                return "intraday"
+            if product_type == "delivery":
+                return "delivery"
+
+            if t.side == "short":
+                return "intraday"
+
+            return "intraday" if entry_date == exit_date else "delivery"
+
+        total_costs = 0.0
+        per_trade_costs: List[tuple[datetime, float]] = []
+        trades_net: List[TradeRecord] = []
+
+        for t in trades:
+            side = t.side.lower()
+            qty = float(t.size)
+            entry_price = float(t.entry_price)
+            exit_price = float(t.exit_price)
+
+            if qty <= 0 or entry_price <= 0 or exit_price <= 0:
+                trades_net.append(t)
+                continue
+
+            if side == "long":
+                buy_notional = entry_price * qty
+                sell_notional = exit_price * qty
+            else:
+                # For shorts, treat the sell at entry and buy at exit.
+                buy_notional = exit_price * qty
+                sell_notional = entry_price * qty
+
+            turnover = buy_notional + sell_notional
+            kind = classify_trade(t)
+
+            # Constants derived from Zerodha's public charges for equity cash.
+            # We track buy/sell side components separately so that entry/exit
+            # costs can be shown in the trades table.
+            brokerage_buy = 0.0
+            brokerage_sell = 0.0
+            stt_buy = 0.0
+            stt_sell = 0.0
+            tx_buy = 0.0
+            tx_sell = 0.0
+            sebi_buy = 0.0
+            sebi_sell = 0.0
+            stamp_buy = 0.0
+            stamp_sell = 0.0
+            dp_sell = 0.0
+
+            if kind == "intraday":
+                # Brokerage: 0.03% or Rs. 20 per executed order (per side).
+                def _intraday_brokerage(notional: float) -> float:
+                    return min(0.0003 * notional, 20.0)
+
+                brokerage_buy = _intraday_brokerage(buy_notional)
+                brokerage_sell = _intraday_brokerage(sell_notional)
+
+                # STT: 0.025% on sell side.
+                stt_sell = 0.00025 * sell_notional
+
+                # Transaction charges (NSE): ~0.00297% of turnover.
+                tx_buy = 0.0000297 * buy_notional
+                tx_sell = 0.0000297 * sell_notional
+
+                # SEBI: Rs. 10 per crore of turnover.
+                sebi_buy = (10.0 / 10_000_000.0) * buy_notional
+                sebi_sell = (10.0 / 10_000_000.0) * sell_notional
+
+                # Stamp duty: 0.003% on buy side.
+                stamp_buy = 0.00003 * buy_notional
+            else:
+                # Delivery (CNC): zero brokerage.
+                brokerage_buy = 0.0
+                brokerage_sell = 0.0
+
+                # STT: effectively 0.1% of turnover, charged on the sell leg.
+                stt_buy = 0.0
+                stt_sell = 0.001 * turnover
+
+                # Transaction charges (NSE): ~0.00297% of turnover, split per side.
+                tx_buy = 0.0000297 * buy_notional
+                tx_sell = 0.0000297 * sell_notional
+
+                # SEBI: Rs. 10 per crore of turnover, split per side.
+                sebi_buy = (10.0 / 10_000_000.0) * buy_notional
+                sebi_sell = (10.0 / 10_000_000.0) * sell_notional
+
+                # Stamp duty: 0.015% on buy side.
+                stamp_buy = 0.00015 * buy_notional
+                # DP charges: flat fee per sell transaction (delivery sell).
+                dp_sell = 15.93
+
+            # GST: 18% on (brokerage + SEBI + transaction charges) per side.
+            gst_buy = 0.18 * (brokerage_buy + sebi_buy + tx_buy)
+            gst_sell = 0.18 * (brokerage_sell + sebi_sell + tx_sell)
+
+            entry_cost = (
+                brokerage_buy + stt_buy + tx_buy + sebi_buy + stamp_buy + gst_buy
+            )
+            exit_cost = (
+                brokerage_sell
+                + stt_sell
+                + tx_sell
+                + sebi_sell
+                + stamp_sell
+                + gst_sell
+                + dp_sell
+            )
+
+            cost = entry_cost + exit_cost
+            total_costs += cost
+            per_trade_costs.append((t.exit_timestamp, cost))
+
+            entry_order_type = "MIS" if kind == "intraday" else "CNC"
+            exit_order_type = entry_order_type
+
+            trades_net.append(
+                TradeRecord(
+                    symbol=t.symbol,
+                    side=t.side,
+                    size=t.size,
+                    entry_timestamp=t.entry_timestamp,
+                    entry_price=t.entry_price,
+                    exit_timestamp=t.exit_timestamp,
+                    exit_price=t.exit_price,
+                    pnl=t.pnl - cost,
+                    entry_order_type=entry_order_type,
+                    exit_order_type=exit_order_type,
+                    entry_brokerage=entry_cost,
+                    exit_brokerage=exit_cost,
+                    entry_reason=t.entry_reason,
+                    exit_reason=t.exit_reason,
+                )
+            )
+
+        if total_costs == 0.0:
+            return equity_curve, trades, 0.0
+
+        # Adjust equity curve by subtracting cumulative costs once a trade
+        # completes, so that the final equity matches the net PnL.
+        per_trade_costs.sort(key=lambda x: x[0])
+        i = 0
+        running_costs = 0.0
+        equity_net: List[EquityPoint] = []
+
+        for pt in equity_curve:
+            ts = pt.timestamp
+            while i < len(per_trade_costs) and per_trade_costs[i][0] <= ts:
+                running_costs += per_trade_costs[i][1]
+                i += 1
+            equity_net.append(
+                EquityPoint(timestamp=ts, equity=pt.equity - running_costs)
+            )
+
+        return equity_net, trades_net, total_costs
 
     def _compute_equity_metrics(
         self,
