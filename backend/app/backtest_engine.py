@@ -84,6 +84,11 @@ if bt is not None:
             # Risk sizing defaults (can be overridden via risk_config).
             max_position_size_pct=100.0,
             per_trade_risk_pct=None,
+            # Whether to apply stop-loss / take-profit overlays driven by
+            # risk_config. Strategies that do not implement explicit SL/TP
+            # exits will simply ignore these flags.
+            use_stop_loss=True,
+            use_take_profit=True,
         )
 
         def __init__(self) -> None:
@@ -192,7 +197,13 @@ if bt is not None:
             # Risk-based sizing using per-trade risk and stop-loss distance.
             per_risk_pct = self.p.per_trade_risk_pct
             sl_pct = getattr(self.p, "stop_loss_pct", None)
-            if per_risk_pct is not None and sl_pct is not None and float(sl_pct) > 0.0:
+            use_sl = getattr(self.p, "use_stop_loss", True)
+            if (
+                per_risk_pct is not None
+                and use_sl
+                and sl_pct is not None
+                and float(sl_pct) > 0.0
+            ):
                 risk_capital = capital * float(per_risk_pct) / 100.0
                 per_share_risk = price * float(sl_pct) / 100.0
                 if per_share_risk > 0.0:
@@ -429,16 +440,19 @@ if bt is not None:
             bear_reversal = prev_trend >= 0 and self.trend < 0
 
             # Stop-loss / take-profit exits.
+            use_sl = bool(getattr(self.p, "use_stop_loss", True))
+            use_tp = bool(getattr(self.p, "use_take_profit", True))
+
             if self.position.size > 0:
                 entry = float(self.position.price)
                 stop = entry * (1.0 - float(self.p.stop_loss_pct) / 100.0)
                 target = entry * (1.0 + float(self.p.take_profit_pct) / 100.0)
                 low = float(self.data.low[0])
                 high = float(self.data.high[0])
-                if low <= stop:
+                if use_sl and low <= stop:
                     self._pending_exit_reason = "stop-loss hit (long)"
                     self.close()
-                elif high >= target:
+                elif use_tp and high >= target:
                     self._pending_exit_reason = "take-profit hit (long)"
                     self.close()
             elif self.position.size < 0:
@@ -447,10 +461,10 @@ if bt is not None:
                 target = entry * (1.0 - float(self.p.take_profit_pct) / 100.0)
                 high = float(self.data.high[0])
                 low = float(self.data.low[0])
-                if high >= stop:
+                if use_sl and high >= stop:
                     self._pending_exit_reason = "stop-loss hit (short)"
                     self.close()
-                elif low <= target:
+                elif use_tp and low <= target:
                     self._pending_exit_reason = "take-profit hit (short)"
                     self.close()
 
@@ -546,7 +560,8 @@ class BacktraderEngine:
         # Map high-level risk settings into engine/strategy params where
         # meaningful. For engines that support configurable SL/TP (like
         # ZeroLagTrendMtfStrategy), we let risk_config override their internal
-        # defaults. We also propagate sizing-related settings.
+        # defaults. We also propagate sizing-related settings and the flags
+        # that decide whether SL/TP overlays are applied at all.
         strategy_params: Dict[str, Any] = dict(config.params)
         if config.strategy_code == "ZeroLagTrendMtfStrategy":
             sl_pct = risk_cfg.get("stopLossPct")
@@ -555,12 +570,18 @@ class BacktraderEngine:
                 strategy_params["stop_loss_pct"] = float(sl_pct)
             if isinstance(tp_pct, (int, float)):
                 strategy_params["take_profit_pct"] = float(tp_pct)
+        use_sl = risk_cfg.get("useStopLoss")
+        use_tp = risk_cfg.get("useTakeProfit")
         max_pos_pct = risk_cfg.get("maxPositionSizePct")
         per_trade_pct = risk_cfg.get("perTradeRiskPct")
         if isinstance(max_pos_pct, (int, float)):
             strategy_params["max_position_size_pct"] = float(max_pos_pct)
         if isinstance(per_trade_pct, (int, float)):
             strategy_params["per_trade_risk_pct"] = float(per_trade_pct)
+        if isinstance(use_sl, bool):
+            strategy_params["use_stop_loss"] = use_sl
+        if isinstance(use_tp, bool):
+            strategy_params["use_take_profit"] = use_tp
 
         broker_params = {
             "broker_product_type": broker_product,

@@ -191,6 +191,23 @@ class BacktestService:
         )
         metrics.update(self._compute_trade_metrics(trades_with_costs))
 
+        # Partition total PnL into realised (from closed trades) and
+        # unrealised (open mark-to-market) components so the UI can explain
+        # why equity and trade-level PnL may differ.
+        realised_pnl = 0.0
+        if isinstance(trades_with_costs, list):
+            realised_pnl = sum(
+                float(t.pnl) for t in trades_with_costs if isinstance(t, TradeRecord)
+            )
+        total_pnl = float(metrics.get("pnl", gross_pnl - total_costs))
+        unrealised_pnl = total_pnl - realised_pnl
+        metrics["pnl_realised"] = realised_pnl
+        metrics["pnl_unrealised"] = unrealised_pnl
+        # For now, the "what-if" PnL corresponds to the current open
+        # mark-to-market. In future we may extend this to include estimated
+        # exit costs.
+        metrics["pnl_what_if"] = unrealised_pnl
+
         backtest = Backtest(
             strategy_id=strategy.id,
             params_id=params_id,

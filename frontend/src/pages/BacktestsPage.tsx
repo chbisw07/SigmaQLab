@@ -50,6 +50,8 @@ type RiskConfig = {
   allowShortSelling?: boolean | null;
   stopLossPct?: number | null;
   takeProfitPct?: number | null;
+  useStopLoss?: boolean | null;
+  useTakeProfit?: boolean | null;
 };
 
 type CostsConfig = {
@@ -232,7 +234,9 @@ export const BacktestsPage = () => {
     perTradeRiskPct: 1,
     allowShortSelling: true,
     stopLossPct: 3,
-    takeProfitPct: 7
+    takeProfitPct: 7,
+    useStopLoss: true,
+    useTakeProfit: true
   });
   const [runCostsConfig, setRunCostsConfig] = useState<CostsConfig>({});
 
@@ -269,7 +273,9 @@ export const BacktestsPage = () => {
       perTradeRiskPct: 1,
       allowShortSelling: true,
       stopLossPct: 3,
-      takeProfitPct: 7
+      takeProfitPct: 7,
+      useStopLoss: true,
+      useTakeProfit: true
     });
     setRunCostsConfig({
       broker: "zerodha",
@@ -1217,7 +1223,40 @@ export const BacktestsPage = () => {
                     Final value: {formatNumber(selectedBacktest.metrics.final_value)}
                   </Typography>
                   <Typography variant="body2">
-                    PnL: {formatNumber(selectedBacktest.metrics.pnl)}
+                    PnL:{" "}
+                    {(() => {
+                      const m = selectedBacktest
+                        .metrics as Record<string, unknown>;
+                      const total =
+                        typeof m.pnl === "number" ? m.pnl : undefined;
+                      const realised =
+                        typeof m.pnl_realised === "number"
+                          ? m.pnl_realised
+                          : undefined;
+                      const unrealised =
+                        typeof m.pnl_unrealised === "number"
+                          ? m.pnl_unrealised
+                          : undefined;
+                      if (total === undefined) {
+                        return "";
+                      }
+                      const totalStr = formatNumber(total);
+                      if (realised === undefined || unrealised === undefined) {
+                        return totalStr;
+                      }
+                      return `${totalStr} = ${formatNumber(
+                        realised
+                      )} (realised) + ${formatNumber(
+                        unrealised
+                      )} (unrealised)`;
+                    })()}
+                  </Typography>
+                  <Typography variant="body2">
+                    What-if PnL (open):{" "}
+                    {formatNumber(
+                      (selectedBacktest.metrics as Record<string, unknown>)
+                        .pnl_what_if as number
+                    )}
                   </Typography>
                   <Typography variant="body2">
                     Total return: {formatPercent(selectedBacktest.metrics.total_return)}
@@ -1612,12 +1651,27 @@ export const BacktestsPage = () => {
                 />
                 <Grid container spacing={2} mt={1}>
                   <Grid item xs={6}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={runRiskConfig.useStopLoss ?? true}
+                          onChange={(e) =>
+                            setRunRiskConfig((prev) => ({
+                              ...prev,
+                              useStopLoss: e.target.checked
+                            }))
+                          }
+                        />
+                      }
+                      label="Apply default stop-loss"
+                    />
                     <TextField
                       fullWidth
                       margin="normal"
                       label="Default stop-loss (%)"
                       type="number"
                       value={runRiskConfig.stopLossPct ?? ""}
+                      disabled={runRiskConfig.useStopLoss === false}
                       onChange={(e) =>
                         setRunRiskConfig((prev) => ({
                           ...prev,
@@ -1630,12 +1684,27 @@ export const BacktestsPage = () => {
                     />
                   </Grid>
                   <Grid item xs={6}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={runRiskConfig.useTakeProfit ?? true}
+                          onChange={(e) =>
+                            setRunRiskConfig((prev) => ({
+                              ...prev,
+                              useTakeProfit: e.target.checked
+                            }))
+                          }
+                        />
+                      }
+                      label="Apply default take-profit"
+                    />
                     <TextField
                       fullWidth
                       margin="normal"
                       label="Default take-profit (%)"
                       type="number"
                       value={runRiskConfig.takeProfitPct ?? ""}
+                      disabled={runRiskConfig.useTakeProfit === false}
                       onChange={(e) =>
                         setRunRiskConfig((prev) => ({
                           ...prev,
