@@ -7,6 +7,7 @@ import { defaultAppThemeId, getAppTheme, type AppThemeId } from "./theme";
 import { DashboardPage } from "./pages/DashboardPage";
 import { StrategiesPage } from "./pages/StrategiesPage";
 import { BacktestsPage } from "./pages/BacktestsPage";
+import { StocksPage } from "./pages/StocksPage";
 import { DataPage } from "./pages/DataPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AppearanceContext } from "./appearanceContext";
@@ -49,6 +50,7 @@ export const App = () => {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/data" element={<DataPage />} />
+            <Route path="/stocks" element={<StocksPage />} />
             <Route path="/strategies" element={<StrategiesPage />} />
             <Route path="/backtests" element={<BacktestsPage />} />
             <Route path="/appearance" element={<AppearancePage />} />
