@@ -76,6 +76,8 @@ type Backtest = {
   strategy_id: number;
   params_id: number | null;
   engine: string;
+   group_id?: number | null;
+   universe_mode?: string | null;
   label: string | null;
   notes: string | null;
   symbols_json: string[];
@@ -218,6 +220,19 @@ export const BacktestsPage = () => {
   const [useExistingCoverage, setUseExistingCoverage] = useState(false);
   const [selectedCoverageId, setSelectedCoverageId] = useState<string>("");
 
+  type StockGroup = {
+    id: number;
+    code: string;
+    name: string;
+    description?: string | null;
+    tags?: string[] | null;
+    stock_count: number;
+  };
+
+  const [stockGroups, setStockGroups] = useState<StockGroup[]>([]);
+  const [targetMode, setTargetMode] = useState<"single" | "group">("single");
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+
   const [visualSettings, setVisualSettings] = useState<VisualConfig>({
     showTradeMarkers: true,
     showProjection: true,
@@ -252,6 +267,8 @@ export const BacktestsPage = () => {
   const resetRunFormDefaults = () => {
     setSelectedStrategyId(null);
     setSelectedParamsId(null);
+    setTargetMode("single");
+    setSelectedGroupId(null);
     setUseExistingCoverage(false);
     setSymbol("");
     setExchange("NSE");
@@ -295,10 +312,11 @@ export const BacktestsPage = () => {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        const [strategiesRes, backtestsRes, coverageRes] = await Promise.all([
+        const [strategiesRes, backtestsRes, coverageRes, groupsRes] = await Promise.all([
           fetch(`${API_BASE}/api/strategies`),
           fetch(`${API_BASE}/api/backtests`),
-          fetch(`${API_BASE}/api/data/summary`)
+          fetch(`${API_BASE}/api/data/summary`),
+          fetch(`${API_BASE}/api/stock-groups`)
         ]);
 
         if (strategiesRes.ok) {
@@ -331,12 +349,20 @@ export const BacktestsPage = () => {
             setSelectedCoverageId(data[0].coverage_id);
           }
         }
+
+        if (groupsRes.ok) {
+          const groupsData: StockGroup[] = await groupsRes.json();
+          setStockGroups(groupsData);
+          if (groupsData.length > 0 && selectedGroupId === null) {
+            setSelectedGroupId(groupsData[0].id);
+          }
+        }
       } catch {
         // ignore; user can still interact with the page
       }
     };
     loadInitialData();
-  }, []);
+  }, [selectedGroupId]);
 
   useEffect(() => {
     // Clamp current page if the number of backtests or page size changes.
@@ -400,7 +426,9 @@ export const BacktestsPage = () => {
     }
 
     // Determine effective symbol/timeframe/date range, either from a selected
-    // coverage row or from the manual form inputs.
+    // coverage row or from the manual form inputs. For group backtests, the
+    // symbol field is not used by the backend and we treat data mode as
+    // "use existing OHLC data" for all group members.
     let effectiveSymbol = symbol.trim().toUpperCase();
     let effectiveTimeframe = timeframe;
     let effectiveStartDate = startDate;
@@ -409,7 +437,31 @@ export const BacktestsPage = () => {
     let effectiveEndTime = endTime || "15:30";
     let effectivePriceSource = priceSource || null;
 
-    if (useExistingCoverage) {
+    if (targetMode === "group") {
+      // Group backtests: rely on existing OHLC data for each member. We do
+      // not trigger a fresh data fetch here; the Data page is responsible
+      // for populating coverage for each stock in the group.
+      if (!selectedGroupId) {
+        setRunState("error");
+        setRunMessage("Select a stock group when running a group backtest.");
+        return;
+      }
+      if (!timeframe || !startDate || !endDate) {
+        setRunState("error");
+        setRunMessage(
+          "Provide interval and date range for group backtests."
+        );
+        return;
+      }
+      effectiveSymbol = "GROUP";
+      effectiveTimeframe = timeframe;
+      effectiveStartDate = startDate;
+      effectiveEndDate = endDate;
+      // Use explicit times; group runs still respect intraday session where applicable.
+      effectiveStartTime = startTime || "09:15";
+      effectiveEndTime = endTime || "15:30";
+      effectivePriceSource = priceSource || null;
+    } else if (useExistingCoverage) {
       const cov = coverageSummary.find(
         (c) => c.coverage_id === selectedCoverageId
       );
@@ -494,6 +546,14 @@ export const BacktestsPage = () => {
       price_source: effectivePriceSource,
       params: overrides
     };
+
+    if (targetMode === "group") {
+      payload.group_id = selectedGroupId;
+      payload.universe_mode = "group";
+    } else {
+      payload.universe_mode = "single";
+      payload.group_id = null;
+    }
 
     if (Object.keys(runRiskConfig).length > 0) {
       payload.risk_config = runRiskConfig;
@@ -729,6 +789,27 @@ export const BacktestsPage = () => {
   const [showTradesTable, setShowTradesTable] = useState(false);
   const [chartFullscreenOpen, setChartFullscreenOpen] = useState(false);
 
+  const getPerSymbolMetrics = () => {
+    if (!selectedBacktest) return [];
+    const metrics = selectedBacktest.metrics as Record<string, unknown>;
+    const perSymbol = metrics.per_symbol as
+      | Record<
+          string,
+          {
+            trade_count?: number;
+            pnl?: number;
+          }
+        >
+      | undefined;
+    if (!perSymbol) return [];
+    return Object.entries(perSymbol).map(([symbolKey, info]) => ({
+      symbol: symbolKey,
+      trade_count:
+        typeof info.trade_count === "number" ? info.trade_count : undefined,
+      pnl: typeof info.pnl === "number" ? info.pnl : undefined
+    }));
+  };
+
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
@@ -795,6 +876,22 @@ export const BacktestsPage = () => {
                     select
                     fullWidth
                     margin="normal"
+                    label="Target"
+                    helperText="Choose whether to backtest a single symbol or a stock group."
+                    value={targetMode}
+                    onChange={(e) =>
+                      setTargetMode(
+                        e.target.value === "group" ? "group" : "single"
+                      )
+                    }
+                  >
+                    <MenuItem value="single">Single stock</MenuItem>
+                    <MenuItem value="group">Stock group (portfolio)</MenuItem>
+                  </TextField>
+                  <TextField
+                    select
+                    fullWidth
+                    margin="normal"
                     label="Strategy"
                     value={selectedStrategyId ?? ""}
                     onChange={(e) =>
@@ -814,22 +911,24 @@ export const BacktestsPage = () => {
                     ))}
                   </TextField>
 
-                  <TextField
-                    select
-                    fullWidth
-                    margin="normal"
-                    label="Data mode"
-                    helperText="Use existing coverage (ID) or fetch fresh data"
-                    value={useExistingCoverage ? "existing" : "fresh"}
-                    onChange={(e) =>
-                      setUseExistingCoverage(e.target.value === "existing")
-                    }
-                  >
-                    <MenuItem value="existing">Use existing coverage</MenuItem>
-                    <MenuItem value="fresh">Fetch fresh data</MenuItem>
-                  </TextField>
+                  {targetMode === "single" && (
+                    <TextField
+                      select
+                      fullWidth
+                      margin="normal"
+                      label="Data mode"
+                      helperText="Use existing coverage (ID) or fetch fresh data"
+                      value={useExistingCoverage ? "existing" : "fresh"}
+                      onChange={(e) =>
+                        setUseExistingCoverage(e.target.value === "existing")
+                      }
+                    >
+                      <MenuItem value="existing">Use existing coverage</MenuItem>
+                      <MenuItem value="fresh">Fetch fresh data</MenuItem>
+                    </TextField>
+                  )}
 
-                  {useExistingCoverage ? (
+                  {targetMode === "single" && useExistingCoverage ? (
                     <>
                       <TextField
                         select
@@ -847,7 +946,9 @@ export const BacktestsPage = () => {
                         ))}
                       </TextField>
                     </>
-                  ) : (
+                  ) : null}
+
+                  {targetMode === "single" && !useExistingCoverage && (
                     <>
                       <TextField
                         fullWidth
@@ -890,6 +991,89 @@ export const BacktestsPage = () => {
 
                       <Grid container spacing={2}>
                         <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="Start date"
+                            type="date"
+                            InputLabelProps={{ shrink: true }}
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                          />
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="Start time"
+                            type="time"
+                            InputLabelProps={{ shrink: true }}
+                            value={startTime}
+                            onChange={(e) => setStartTime(e.target.value)}
+                          />
+                        </Grid>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="End date"
+                            type="date"
+                            InputLabelProps={{ shrink: true }}
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                          />
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="End time"
+                            type="time"
+                            InputLabelProps={{ shrink: true }}
+                            value={endTime}
+                            onChange={(e) => setEndTime(e.target.value)}
+                          />
+                        </Grid>
+                      </Grid>
+                    </>
+                  )}
+
+                  {targetMode === "group" && (
+                    <>
+                      <Typography variant="body2" color="textSecondary" mt={1}>
+                        Group backtests use existing OHLC data for each stock in
+                        the selected group. Fetch data for group members via the
+                        Data page before running.
+                      </Typography>
+                      <TextField
+                        select
+                        fullWidth
+                        margin="normal"
+                        label="Stock group"
+                        helperText="Select a stock group to run the strategy on."
+                        value={selectedGroupId ?? ""}
+                        onChange={(e) =>
+                          setSelectedGroupId(
+                            e.target.value === ""
+                              ? null
+                              : Number.parseInt(e.target.value, 10)
+                          )
+                        }
+                      >
+                        <MenuItem value="">
+                          <em>None</em>
+                        </MenuItem>
+                        {stockGroups.map((g) => (
+                          <MenuItem key={g.id} value={g.id}>
+                            {g.code} – {g.name}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="Interval"
+                            value={timeframe}
+                            onChange={(e) => setTimeframe(e.target.value)}
+                          />
                           <TextField
                             fullWidth
                             margin="normal"
@@ -1201,7 +1385,13 @@ export const BacktestsPage = () => {
                     Strategy: {getStrategyLabel(selectedBacktest.strategy_id)}
                   </Typography>
                   <Typography variant="body2">
-                    Symbol(s): {renderSymbols(selectedBacktest.symbols_json ?? [])}
+                    {selectedBacktest.group_id
+                      ? `Group symbols: ${renderSymbols(
+                          selectedBacktest.symbols_json ?? []
+                        )}`
+                      : `Symbol(s): ${renderSymbols(
+                          selectedBacktest.symbols_json ?? []
+                        )}`}
                   </Typography>
                   <Typography variant="body2">
                     Interval: {selectedBacktest.timeframe}
@@ -1251,6 +1441,45 @@ export const BacktestsPage = () => {
                       )} (unrealised)`;
                     })()}
                   </Typography>
+                  {selectedBacktest.group_id && (
+                    <Box mt={2}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Per-symbol summary
+                      </Typography>
+                      {getPerSymbolMetrics().length === 0 ? (
+                        <Typography variant="body2" color="textSecondary">
+                          No per-symbol metrics available for this backtest.
+                        </Typography>
+                      ) : (
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Symbol</TableCell>
+                              <TableCell align="right">Trades</TableCell>
+                              <TableCell align="right">Net PnL</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {getPerSymbolMetrics().map((row) => (
+                              <TableRow key={row.symbol}>
+                                <TableCell>{row.symbol}</TableCell>
+                                <TableCell align="right">
+                                  {row.trade_count !== undefined
+                                    ? row.trade_count.toFixed(0)
+                                    : ""}
+                                </TableCell>
+                                <TableCell align="right">
+                                  {row.pnl !== undefined
+                                    ? row.pnl.toFixed(2)
+                                    : ""}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </Box>
+                  )}
                   <Typography variant="body2">
                     What-if PnL (open):{" "}
                     {formatNumber(
