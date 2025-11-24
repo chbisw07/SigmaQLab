@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from math import sqrt
 from statistics import mean, pstdev
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -51,6 +51,54 @@ class BacktestService:
     def __init__(self, *, engine: BacktraderEngine | None = None) -> None:
         self._engine = engine or BacktraderEngine()
 
+    def _load_price_dataframe(
+        self,
+        prices_db: Session,
+        *,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> Optional[pd.DataFrame]:
+        """Load OHLCV price data for a symbol into a DataFrame.
+
+        First attempts a direct timeframe match; if no rows are found, it
+        falls back to aggregating from a finer timeframe via the helper
+        `_aggregate_from_lower_timeframe`.
+        """
+
+        price_rows = (
+            prices_db.query(PriceBar)
+            .filter(
+                PriceBar.symbol == symbol,
+                PriceBar.timeframe == timeframe,
+                PriceBar.timestamp >= start,
+                PriceBar.timestamp <= end,
+            )
+            .order_by(PriceBar.timestamp.asc())
+            .all()
+        )
+
+        if price_rows:
+            return pd.DataFrame(
+                {
+                    "open": [r.open for r in price_rows],
+                    "high": [r.high for r in price_rows],
+                    "low": [r.low for r in price_rows],
+                    "close": [r.close for r in price_rows],
+                    "volume": [r.volume or 0.0 for r in price_rows],
+                },
+                index=[r.timestamp for r in price_rows],
+            )
+
+        return self._aggregate_from_lower_timeframe(
+            prices_db=prices_db,
+            symbol=symbol,
+            target_timeframe=timeframe,
+            start=start,
+            end=end,
+        )
+
     def run_single_backtest(
         self,
         meta_db: Session,
@@ -97,40 +145,13 @@ class BacktestService:
         if params:
             resolved_params.update(params)
 
-        # First attempt: direct match on requested timeframe.
-        price_rows = (
-            prices_db.query(PriceBar)
-            .filter(
-                PriceBar.symbol == symbol,
-                PriceBar.timeframe == timeframe,
-                PriceBar.timestamp >= start,
-                PriceBar.timestamp <= end,
-            )
-            .order_by(PriceBar.timestamp.asc())
-            .all()
+        df = self._load_price_dataframe(
+            prices_db,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
         )
-
-        df: Optional[pd.DataFrame]
-        if price_rows:
-            df = pd.DataFrame(
-                {
-                    "open": [r.open for r in price_rows],
-                    "high": [r.high for r in price_rows],
-                    "low": [r.low for r in price_rows],
-                    "close": [r.close for r in price_rows],
-                    "volume": [r.volume or 0.0 for r in price_rows],
-                },
-                index=[r.timestamp for r in price_rows],
-            )
-        else:
-            # Fallback: attempt to aggregate from a finer timeframe (e.g. 1h -> 1d).
-            df = self._aggregate_from_lower_timeframe(
-                prices_db=prices_db,
-                symbol=symbol,
-                target_timeframe=timeframe,
-                start=start,
-                end=end,
-            )
 
         if df is None or df.empty:
             msg = "No price data available for given symbol/timeframe window"
@@ -340,6 +361,504 @@ class BacktestService:
         meta_db.commit()
 
         return backtest
+
+    def run_group_backtest(
+        self,
+        meta_db: Session,
+        prices_db: Session,
+        *,
+        strategy_id: int,
+        group_id: int,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+        initial_capital: float,
+        params: Dict[str, Any] | None = None,
+        params_id: int | None = None,
+        price_source: str | None = None,
+        label: str | None = None,
+        notes: str | None = None,
+        risk_config: Dict[str, Any] | None = None,
+        costs_config: Dict[str, Any] | None = None,
+        visual_config: Dict[str, Any] | None = None,
+    ) -> Backtest:
+        """Run a portfolio/group backtest and persist a Backtest record.
+
+        This method:
+        - Resolves the stock group to a list of symbols.
+        - Runs the strategy engine per symbol to generate candidate trades.
+        - Feeds all candidates into a portfolio simulator that enforces
+          shared-capital risk rules and broker constraints.
+        - Persists a single Backtest representing the portfolio equity and
+          trade log.
+        """
+
+        strategy = meta_db.get(Strategy, strategy_id)
+        if strategy is None:
+            msg = f"Strategy {strategy_id} not found"
+            raise ValueError(msg)
+
+        engine_code = strategy.engine_code or strategy.code
+
+        resolved_params: Dict[str, Any] = {}
+        if params_id is not None:
+            param = meta_db.get(StrategyParameter, params_id)
+            if param is None:
+                msg = f"StrategyParameter {params_id} not found"
+                raise ValueError(msg)
+            resolved_params.update(param.params_json or {})
+        if params:
+            resolved_params.update(params)
+
+        symbols = self.resolve_group_symbols(meta_db, group_id=group_id)
+        if not symbols:
+            msg = f"StockGroup {group_id} has no active members"
+            raise ValueError(msg)
+
+        # Load data and generate candidate trades per symbol using the existing
+        # Backtrader engine, but with risk sizing largely neutral so that the
+        # portfolio simulator can re-apply shared-capital constraints.
+        price_data_by_symbol: Dict[str, pd.DataFrame] = {}
+        candidate_trades: List[TradeRecord] = []
+
+        for symbol in symbols:
+            df = self._load_price_dataframe(
+                prices_db,
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+            )
+            if df is None or df.empty:
+                # Skip symbols without data in this window.
+                continue
+            price_data_by_symbol[symbol] = df
+
+            cfg = BacktestConfig(
+                strategy_code=engine_code,
+                symbol=symbol,
+                timeframe=timeframe,
+                initial_capital=initial_capital,
+                params=resolved_params,
+                risk_config=risk_config,
+                costs_config=None,
+            )
+            result = self._engine.run(cfg, df)
+            for trade in result.trades:
+                if isinstance(trade, TradeRecord):
+                    candidate_trades.append(trade)
+
+        if not price_data_by_symbol:
+            msg = (
+                "No price data available for any group member in the requested "
+                "timeframe window"
+            )
+            raise ValueError(msg)
+
+        if not candidate_trades:
+            # No trades across the group; we still want a flat equity curve.
+            # Use the union of timestamps to build a constant-equity series.
+            all_times = sorted(
+                {
+                    ts
+                    for df in price_data_by_symbol.values()
+                    for ts in df.index.to_pydatetime()
+                }
+            )
+            equity_curve = [
+                EquityPoint(timestamp=ts, equity=initial_capital) for ts in all_times
+            ]
+            trades: List[TradeRecord] = []
+        else:
+            equity_curve, trades = self._run_portfolio_simulator(
+                initial_capital=initial_capital,
+                timeframe=timeframe,
+                price_data_by_symbol=price_data_by_symbol,
+                candidate_trades=candidate_trades,
+                risk_config=risk_config or {},
+            )
+
+        # Apply Zerodha-style costs at the portfolio level if requested.
+        equity_curve_with_costs = equity_curve
+        trades_with_costs = trades
+        gross_final_value = equity_curve[-1].equity if equity_curve else initial_capital
+        gross_pnl = gross_final_value - initial_capital
+        total_costs = 0.0
+
+        if costs_config and trades and equity_curve:
+            (
+                equity_curve_with_costs,
+                trades_with_costs,
+                total_costs,
+            ) = self._apply_costs_indian_equity(
+                equity_curve=equity_curve,
+                trades=trades,
+                costs_config=costs_config,
+            )
+
+        # Derive metrics for the portfolio.
+        metrics: Dict[str, float] = {}
+        metrics["gross_final_value"] = gross_final_value
+        metrics["gross_pnl"] = gross_pnl
+        metrics["total_costs"] = total_costs
+
+        if total_costs > 0.0:
+            net_final_value = gross_final_value - total_costs
+            net_pnl = gross_pnl - total_costs
+        else:
+            net_final_value = gross_final_value
+            net_pnl = gross_pnl
+
+        metrics["final_value"] = net_final_value
+        metrics["initial_capital"] = float(initial_capital)
+        metrics["pnl"] = net_pnl
+        metrics["pnl_net"] = net_pnl
+
+        metrics.update(
+            self._compute_equity_metrics(
+                equity_curve_with_costs,
+                timeframe=timeframe,
+            )
+        )
+        metrics.update(self._compute_trade_metrics(trades_with_costs))
+
+        # Partition PnL into realised and unrealised components based on the
+        # portfolio's closed trades and final equity.
+        realised_pnl = 0.0
+        if isinstance(trades_with_costs, list):
+            realised_pnl = sum(
+                float(t.pnl) for t in trades_with_costs if isinstance(t, TradeRecord)
+            )
+        total_pnl = float(metrics.get("pnl", net_pnl))
+        unrealised_pnl = total_pnl - realised_pnl
+        metrics["pnl_realised"] = realised_pnl
+        metrics["pnl_unrealised"] = unrealised_pnl
+        metrics["pnl_what_if"] = unrealised_pnl
+
+        # Per-symbol summary metrics (basic for now): trade_count and net PnL.
+        per_symbol: Dict[str, Dict[str, float]] = {}
+        for trade in trades_with_costs:
+            if not isinstance(trade, TradeRecord):
+                continue
+            info = per_symbol.setdefault(
+                trade.symbol,
+                {"trade_count": 0.0, "pnl": 0.0},
+            )
+            info["trade_count"] += 1.0
+            info["pnl"] += float(trade.pnl)
+        metrics["per_symbol"] = per_symbol
+
+        backtest = Backtest(
+            strategy_id=strategy.id,
+            params_id=params_id,
+            engine="backtrader",
+            group_id=group_id,
+            universe_mode="group",
+            label=label,
+            notes=notes,
+            symbols_json=list(price_data_by_symbol.keys()),
+            timeframe=timeframe,
+            start_date=start,
+            end_date=end,
+            initial_capital=initial_capital,
+            starting_portfolio_json=None,
+            params_effective_json=resolved_params or None,
+            risk_config_json=risk_config,
+            costs_config_json=costs_config,
+            visual_config_json=visual_config,
+            status="completed",
+            metrics_json=metrics,
+            data_source=price_source,
+        )
+        meta_db.add(backtest)
+        meta_db.commit()
+        meta_db.refresh(backtest)
+
+        # Persist equity curve points.
+        if isinstance(equity_curve_with_costs, list) and equity_curve_with_costs:
+            equity_rows = [
+                BacktestEquityPoint(
+                    backtest_id=backtest.id,
+                    timestamp=pt.timestamp,
+                    equity=pt.equity,
+                )
+                for pt in equity_curve_with_costs
+                if isinstance(pt, EquityPoint)
+            ]
+            meta_db.add_all(equity_rows)
+
+        # Persist portfolio trades, deriving per-trade metrics per symbol.
+        if isinstance(trades_with_costs, list) and trades_with_costs:
+            trade_rows: List[BacktestTrade] = []
+
+            for trade in trades_with_costs:
+                if not isinstance(trade, TradeRecord):
+                    continue
+
+                symbol = trade.symbol
+                df = price_data_by_symbol.get(symbol)
+                if df is None or df.empty:
+                    continue
+
+                closes = df["close"]
+
+                direction = 1.0 if trade.side == "long" else -1.0
+                mask_from_entry = closes.index >= trade.entry_timestamp
+                window_after_entry = closes[mask_from_entry]
+
+                mask_holding = (closes.index >= trade.entry_timestamp) & (
+                    closes.index <= trade.exit_timestamp
+                )
+                holding_window = closes[mask_holding]
+
+                holding_period_bars: int | None = None
+                if not holding_window.empty:
+                    holding_period_bars = int(len(holding_window))
+
+                notional = trade.entry_price * trade.size
+                pnl_pct: float | None = None
+                if notional > 0:
+                    pnl_pct = trade.pnl / notional
+
+                max_theoretical_pnl: float | None = None
+                max_theoretical_pnl_pct: float | None = None
+                pnl_capture_ratio: float | None = None
+
+                if not window_after_entry.empty and notional > 0:
+                    price_diff = window_after_entry - trade.entry_price
+                    projection = direction * price_diff * trade.size
+                    max_theoretical_pnl = float(projection.max())
+                    if max_theoretical_pnl != 0:
+                        max_theoretical_pnl_pct = max_theoretical_pnl / notional
+                        pnl_capture_ratio = trade.pnl / max_theoretical_pnl
+
+                trade_rows.append(
+                    BacktestTrade(
+                        backtest_id=backtest.id,
+                        symbol=trade.symbol,
+                        side=trade.side,
+                        size=trade.size,
+                        entry_timestamp=trade.entry_timestamp,
+                        entry_price=trade.entry_price,
+                        exit_timestamp=trade.exit_timestamp,
+                        exit_price=trade.exit_price,
+                        pnl=trade.pnl,
+                        pnl_pct=pnl_pct,
+                        holding_period_bars=holding_period_bars,
+                        max_theoretical_pnl=max_theoretical_pnl,
+                        max_theoretical_pnl_pct=max_theoretical_pnl_pct,
+                        pnl_capture_ratio=pnl_capture_ratio,
+                        entry_order_type=trade.entry_order_type,
+                        exit_order_type=trade.exit_order_type,
+                        entry_brokerage=trade.entry_brokerage,
+                        exit_brokerage=trade.exit_brokerage,
+                        entry_reason=trade.entry_reason,
+                        exit_reason=trade.exit_reason,
+                    )
+                )
+
+            if trade_rows:
+                meta_db.add_all(trade_rows)
+
+        meta_db.commit()
+
+        return backtest
+
+    def _run_portfolio_simulator(
+        self,
+        *,
+        initial_capital: float,
+        timeframe: str,
+        price_data_by_symbol: Dict[str, pd.DataFrame],
+        candidate_trades: List[TradeRecord],
+        risk_config: Dict[str, Any],
+    ) -> Tuple[List[EquityPoint], List[TradeRecord]]:
+        """Replay candidate trades under shared-capital risk rules.
+
+        The simulator:
+        - Treats each TradeRecord as a candidate entry/exit pair.
+        - Applies maxPositionSizePct and perTradeRiskPct at the portfolio level.
+        - Enforces basic broker constraints by honouring allowShortSelling.
+        - Currently uses a simple allocation policy: highest-confidence single
+          candidate per timestamp (all confidences default to 1.0).
+        """
+
+        if not candidate_trades:
+            return [], []
+
+        # Normalise and group candidate entries by timestamp.
+        entries_by_time: Dict[datetime, List[TradeRecord]] = {}
+        for trade in candidate_trades:
+            entries_by_time.setdefault(trade.entry_timestamp, []).append(trade)
+
+        # Union of all bar timestamps across symbols for equity sampling.
+        all_times = sorted(
+            {
+                ts
+                for df in price_data_by_symbol.values()
+                for ts in df.index.to_pydatetime()
+            }
+        )
+
+        if not all_times:
+            return [], []
+
+        allow_short = bool(risk_config.get("allowShortSelling", True))
+        max_pos_pct = float(risk_config.get("maxPositionSizePct", 100.0))
+        per_trade_pct = risk_config.get("perTradeRiskPct")
+        sl_pct = risk_config.get("stopLossPct")
+        use_sl = risk_config.get("useStopLoss", True)
+
+        equity_curve: List[EquityPoint] = []
+        executed_trades: List[TradeRecord] = []
+
+        cash = float(initial_capital)
+        positions: Dict[str, float] = {}  # symbol -> net size (+long/-short)
+        last_prices: Dict[str, float] = {}
+
+        # Map exit timestamps to trades that should be closed then.
+        exits_by_time: Dict[datetime, List[TradeRecord]] = {}
+
+        def _current_equity() -> float:
+            equity_val = cash
+            for symbol, size in positions.items():
+                price = last_prices.get(symbol)
+                if price is not None and size != 0:
+                    equity_val += size * price
+            return equity_val
+
+        def _compute_order_size(
+            *,
+            symbol: str,
+            side: str,
+            entry_price: float,
+            equity: float,
+            cash_available: float,
+            max_candidate_size: float,
+        ) -> int:
+            """Approximate risk-based order sizing at the portfolio level."""
+
+            price = float(entry_price)
+            if price <= 0.0:
+                return 0
+
+            current_symbol_notional = abs(positions.get(symbol, 0.0)) * price
+            max_notional_per_position = equity * max_pos_pct / 100.0
+            remaining_notional = max(
+                0.0, max_notional_per_position - current_symbol_notional
+            )
+            if remaining_notional <= 0.0:
+                return 0
+
+            # For long positions we cannot exceed available cash.
+            if side == "long":
+                remaining_notional = min(remaining_notional, max(0.0, cash_available))
+
+            qty = remaining_notional / price
+
+            if per_trade_pct is not None and use_sl and sl_pct and float(sl_pct) > 0.0:
+                risk_capital = equity * float(per_trade_pct) / 100.0
+                per_share_risk = price * float(sl_pct) / 100.0
+                if per_share_risk > 0.0:
+                    qty_risk = risk_capital / per_share_risk
+                    qty = min(qty, qty_risk)
+
+            if max_candidate_size > 0.0:
+                qty = min(qty, max_candidate_size)
+
+            size_int = int(qty)
+            if size_int < 1:
+                return 0
+            return size_int
+
+        for ts in all_times:
+            # Update last prices from bar data for mark-to-market.
+            for symbol, df in price_data_by_symbol.items():
+                if ts in df.index:
+                    last_prices[symbol] = float(df.loc[ts, "close"])
+
+            # Process exits scheduled at this timestamp.
+            for trade in exits_by_time.get(ts, []):
+                price = float(trade.exit_price)
+                symbol = trade.symbol
+                size = float(trade.size)
+                if trade.side == "long":
+                    cash += size * price
+                    positions[symbol] = positions.get(symbol, 0.0) - size
+                else:
+                    # Short: buy back shares.
+                    cash -= size * price
+                    positions[symbol] = positions.get(symbol, 0.0) + size
+
+                # Remove tiny residual positions.
+                if abs(positions.get(symbol, 0.0)) < 1e-9:
+                    positions.pop(symbol, None)
+
+                executed_trades.append(trade)
+
+            # Process entries at this timestamp using a simple policy:
+            # pick the first symbol (alphabetically) that can be sized.
+            entry_candidates = entries_by_time.get(ts, [])
+            if entry_candidates:
+                equity_before = _current_equity()
+                for candidate in sorted(
+                    entry_candidates, key=lambda t: (t.entry_timestamp, t.symbol)
+                ):
+                    side = candidate.side
+                    if side == "short" and not allow_short:
+                        continue
+
+                    cash_available = cash
+                    base_size = float(candidate.size)
+                    size = _compute_order_size(
+                        symbol=candidate.symbol,
+                        side=side,
+                        entry_price=candidate.entry_price,
+                        equity=equity_before,
+                        cash_available=cash_available,
+                        max_candidate_size=base_size,
+                    )
+                    if size <= 0:
+                        # Try next candidate at this timestamp.
+                        continue
+
+                    price = float(candidate.entry_price)
+                    symbol = candidate.symbol
+                    if side == "long":
+                        cash -= size * price
+                        positions[symbol] = positions.get(symbol, 0.0) + size
+                    else:
+                        # Short: sell shares first.
+                        cash += size * price
+                        positions[symbol] = positions.get(symbol, 0.0) - size
+
+                    last_prices[symbol] = price
+
+                    # Compute PnL at exit based on price difference.
+                    exit_price = float(candidate.exit_price)
+                    pnl_per_share = (exit_price - price) * (
+                        1.0 if side == "long" else -1.0
+                    )
+                    pnl = pnl_per_share * float(size)
+
+                    trade = TradeRecord(
+                        symbol=symbol,
+                        side=side,
+                        size=float(size),
+                        entry_timestamp=candidate.entry_timestamp,
+                        entry_price=price,
+                        exit_timestamp=candidate.exit_timestamp,
+                        exit_price=exit_price,
+                        pnl=pnl,
+                    )
+                    exits_by_time.setdefault(candidate.exit_timestamp, []).append(trade)
+                    # We only open one trade per timestamp under the current policy.
+                    break
+
+            # Record equity after processing this timestamp.
+            equity_curve.append(EquityPoint(timestamp=ts, equity=_current_equity()))
+
+        return equity_curve, executed_trades
 
     def resolve_group_symbols(
         self,

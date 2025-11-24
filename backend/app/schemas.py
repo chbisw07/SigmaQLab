@@ -318,6 +318,8 @@ class BacktestCreateRequest(BaseModel):
         default=None,
         description="Optional strategy_parameters.id to use as base params",
     )
+    # For single-symbol backtests, `symbol` is required. For group backtests
+    # (universe_mode='group'), `group_id` is used instead.
     symbol: str
     timeframe: str
     start_date: date
@@ -357,6 +359,17 @@ class BacktestCreateRequest(BaseModel):
         default=None,
         description="Optional visualisation settings for the backtest chart",
     )
+    # Optional group/universe fields for portfolio backtests.
+    group_id: int | None = Field(
+        default=None,
+        description=(
+            "Optional stock_groups.id when running a group/portfolio backtest."
+        ),
+    )
+    universe_mode: Literal["single", "group"] = Field(
+        "single",
+        description="Universe mode: 'single' for symbol-level, 'group' for portfolio.",
+    )
 
 
 class BacktestRead(BaseModel):
@@ -366,6 +379,8 @@ class BacktestRead(BaseModel):
     strategy_id: int
     params_id: int | None
     engine: str
+    group_id: int | None = None
+    universe_mode: str | None = None
     label: str | None = None
     notes: str | None = None
     symbols_json: list[str]

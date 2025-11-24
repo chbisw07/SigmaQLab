@@ -48,24 +48,52 @@ async def create_backtest(
         start_time = payload.start_time or default_start_time
         end_time = payload.end_time or default_end_time
 
-        backtest = service.run_single_backtest(
-            meta_db=meta_db,
-            prices_db=prices_db,
-            strategy_id=payload.strategy_id,
-            symbol=payload.symbol,
-            timeframe=payload.timeframe,
-            start=datetime.combine(payload.start_date, start_time),
-            end=datetime.combine(payload.end_date, end_time),
-            initial_capital=payload.initial_capital,
-            params=payload.params,
-            params_id=payload.params_id,
-            price_source=payload.price_source,
-            label=payload.label,
-            notes=payload.notes,
-            risk_config=payload.risk_config,
-            costs_config=payload.costs_config,
-            visual_config=payload.visual_config,
-        )
+        start_dt = datetime.combine(payload.start_date, start_time)
+        end_dt = datetime.combine(payload.end_date, end_time)
+
+        if payload.universe_mode == "group" or payload.group_id is not None:
+            if payload.group_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="group_id is required when universe_mode='group'",
+                )
+            backtest = service.run_group_backtest(
+                meta_db=meta_db,
+                prices_db=prices_db,
+                strategy_id=payload.strategy_id,
+                group_id=payload.group_id,
+                timeframe=payload.timeframe,
+                start=start_dt,
+                end=end_dt,
+                initial_capital=payload.initial_capital,
+                params=payload.params,
+                params_id=payload.params_id,
+                price_source=payload.price_source,
+                label=payload.label,
+                notes=payload.notes,
+                risk_config=payload.risk_config,
+                costs_config=payload.costs_config,
+                visual_config=payload.visual_config,
+            )
+        else:
+            backtest = service.run_single_backtest(
+                meta_db=meta_db,
+                prices_db=prices_db,
+                strategy_id=payload.strategy_id,
+                symbol=payload.symbol,
+                timeframe=payload.timeframe,
+                start=start_dt,
+                end=end_dt,
+                initial_capital=payload.initial_capital,
+                params=payload.params,
+                params_id=payload.params_id,
+                price_source=payload.price_source,
+                label=payload.label,
+                notes=payload.notes,
+                risk_config=payload.risk_config,
+                costs_config=payload.costs_config,
+                visual_config=payload.visual_config,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

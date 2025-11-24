@@ -72,6 +72,10 @@ class Backtest(Base):
     strategy_id = Column(Integer, ForeignKey("strategies.id"), nullable=False)
     params_id = Column(Integer, ForeignKey("strategy_parameters.id"), nullable=True)
     engine = Column(String, nullable=False, default="backtrader")
+    # Optional link to a stock group when this is a portfolio/group backtest.
+    group_id = Column(Integer, ForeignKey("stock_groups.id"), nullable=True)
+    # Universe mode: 'single' for single-symbol runs, 'group' for group/portfolio.
+    universe_mode = Column(String, nullable=True)
     # Optional human-friendly label and notes for this run.
     label = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
@@ -99,6 +103,7 @@ class Backtest(Base):
 
     strategy = relationship("Strategy", back_populates="backtests")
     parameters = relationship("StrategyParameter", back_populates="backtests")
+    group = relationship("StockGroup", back_populates="backtests")
 
 
 class BacktestEquityPoint(Base):
@@ -198,6 +203,7 @@ class StockGroup(Base):
     )
 
     members = relationship("StockGroupMember", back_populates="group")
+    backtests = relationship("Backtest", back_populates="group")
 
 
 class StockGroupMember(Base):

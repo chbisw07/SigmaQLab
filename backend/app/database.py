@@ -58,6 +58,8 @@ def ensure_meta_schema_migrations() -> None:
             "risk_config_json": "JSON",
             "costs_config_json": "JSON",
             "visual_config_json": "JSON",
+            "group_id": "INTEGER",
+            "universe_mode": "VARCHAR",
         }
         missing = {name: ddl for name, ddl in new_cols.items() if name not in columns}
         if missing:
