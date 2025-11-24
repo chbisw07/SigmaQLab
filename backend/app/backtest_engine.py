@@ -81,6 +81,9 @@ if bt is not None:
             broker_product_type="auto",  # intraday, delivery, auto
             allow_short=True,
             session_close_time="15:15",
+            # Risk sizing defaults (can be overridden via risk_config).
+            max_position_size_pct=100.0,
+            per_trade_risk_pct=None,
         )
 
         def __init__(self) -> None:
@@ -150,6 +153,56 @@ if bt is not None:
                 self._pending_exit_reason = reason
                 self._forced_exit_timestamp = dt
                 self.close()
+
+        def _compute_order_size(self, side: str | None = None) -> int:
+            """Compute order size based on risk_config and capital.
+
+            - `max_position_size_pct` caps total notional exposure per symbol.
+            - `per_trade_risk_pct` combined with `stop_loss_pct` caps
+              risk per trade.
+            """
+
+            price = float(self.data.close[0])
+            if price <= 0.0:
+                return 1
+
+            capital = float(self.broker.getvalue())
+
+            # Maximum notional allowed for this position.
+            max_notional = capital * float(self.p.max_position_size_pct) / 100.0
+
+            # If we are adding in the same direction, honour existing exposure;
+            # if we are flipping direction (e.g. long -> short), assume the
+            # previous leg is being fully closed first so the full slot becomes
+            # available for the new side.
+            desired_side = side or ("long" if self.position.size >= 0 else "short")
+            same_direction = (self.position.size > 0 and desired_side == "long") or (
+                self.position.size < 0 and desired_side == "short"
+            )
+            current_notional = (
+                abs(float(self.position.size)) * price if same_direction else 0.0
+            )
+            remaining_notional = max(0.0, max_notional - current_notional)
+            if remaining_notional <= 0.0:
+                return 0
+
+            max_qty_by_notional = remaining_notional / price
+            qty = max_qty_by_notional
+
+            # Risk-based sizing using per-trade risk and stop-loss distance.
+            per_risk_pct = self.p.per_trade_risk_pct
+            sl_pct = getattr(self.p, "stop_loss_pct", None)
+            if per_risk_pct is not None and sl_pct is not None and float(sl_pct) > 0.0:
+                risk_capital = capital * float(per_risk_pct) / 100.0
+                per_share_risk = price * float(sl_pct) / 100.0
+                if per_share_risk > 0.0:
+                    qty_risk = risk_capital / per_share_risk
+                    qty = min(qty, qty_risk)
+
+            size = int(qty)
+            if size < 1:
+                size = 1
+            return size
 
         def next(self) -> None:  # type: ignore[override]
             # Record equity on every bar.
@@ -251,13 +304,17 @@ if bt is not None:
                 if self.crossover > 0:
                     # New long position on bullish crossover.
                     self._pending_entry_reason = "signal: SMA fast crosses above slow"
-                    self.buy()
+                    size = self._compute_order_size(side="long")
+                    if size > 0:
+                        self.buy(size=size)
             elif self.crossover < 0:
                 # Close existing long / open short on bearish crossover.
                 self._pending_exit_reason = "signal: SMA fast crosses below slow"
                 self._pending_entry_reason = "signal: SMA fast crosses below slow"
                 if self._allow_short:
-                    self.sell()
+                    size = self._compute_order_size(side="short")
+                    if size > 0:
+                        self.sell(size=size)
                 else:
                     # If shorting is disabled, only close existing long.
                     if self.position.size > 0:
@@ -404,7 +461,9 @@ if bt is not None:
                     self.close()
                 if self.position.size < int(self.p.pyramid_limit):
                     self._pending_entry_reason = "trend up entry"
-                    self.buy()
+                    size = self._compute_order_size(side="long")
+                    if size > 0:
+                        self.buy(size=size)
 
             if bear_reversal and not bool(self.p.take_long_only):
                 if self.position.size > 0:
@@ -414,7 +473,9 @@ if bt is not None:
                     self.p.pyramid_limit
                 ):
                     self._pending_entry_reason = "trend down entry"
-                    self.sell()
+                    size = self._compute_order_size(side="short")
+                    if size > 0:
+                        self.sell(size=size)
 
             # Apply broker constraints (e.g. intraday square-off) after strategy
             # logic for this bar has run.
@@ -482,6 +543,25 @@ class BacktraderEngine:
         ).lower()
         allow_short = bool(risk_cfg.get("allowShortSelling", True))
 
+        # Map high-level risk settings into engine/strategy params where
+        # meaningful. For engines that support configurable SL/TP (like
+        # ZeroLagTrendMtfStrategy), we let risk_config override their internal
+        # defaults. We also propagate sizing-related settings.
+        strategy_params: Dict[str, Any] = dict(config.params)
+        if config.strategy_code == "ZeroLagTrendMtfStrategy":
+            sl_pct = risk_cfg.get("stopLossPct")
+            tp_pct = risk_cfg.get("takeProfitPct")
+            if isinstance(sl_pct, (int, float)):
+                strategy_params["stop_loss_pct"] = float(sl_pct)
+            if isinstance(tp_pct, (int, float)):
+                strategy_params["take_profit_pct"] = float(tp_pct)
+        max_pos_pct = risk_cfg.get("maxPositionSizePct")
+        per_trade_pct = risk_cfg.get("perTradeRiskPct")
+        if isinstance(max_pos_pct, (int, float)):
+            strategy_params["max_position_size_pct"] = float(max_pos_pct)
+        if isinstance(per_trade_pct, (int, float)):
+            strategy_params["per_trade_risk_pct"] = float(per_trade_pct)
+
         broker_params = {
             "broker_product_type": broker_product,
             "allow_short": allow_short,
@@ -491,7 +571,7 @@ class BacktraderEngine:
         }
 
         # Apply params to strategy, including broker constraints.
-        cerebro.addstrategy(strat_cls, **config.params, **broker_params)
+        cerebro.addstrategy(strat_cls, **strategy_params, **broker_params)
 
         data_feed = bt.feeds.PandasData(
             dataname=price_data,

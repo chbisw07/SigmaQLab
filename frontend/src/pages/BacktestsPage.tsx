@@ -227,7 +227,13 @@ export const BacktestsPage = () => {
   const [advancedTab, setAdvancedTab] = useState<"inputs" | "risk" | "costs">(
     "inputs"
   );
-  const [runRiskConfig, setRunRiskConfig] = useState<RiskConfig>({});
+  const [runRiskConfig, setRunRiskConfig] = useState<RiskConfig>({
+    maxPositionSizePct: 20,
+    perTradeRiskPct: 1,
+    allowShortSelling: true,
+    stopLossPct: 3,
+    takeProfitPct: 7
+  });
   const [runCostsConfig, setRunCostsConfig] = useState<CostsConfig>({});
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -258,7 +264,13 @@ export const BacktestsPage = () => {
     setInitialCapital("100000");
     setPriceSource("kite");
     setOverrideJson("");
-    setRunRiskConfig({});
+    setRunRiskConfig({
+      maxPositionSizePct: 20,
+      perTradeRiskPct: 1,
+      allowShortSelling: true,
+      stopLossPct: 3,
+      takeProfitPct: 7
+    });
     setRunCostsConfig({
       broker: "zerodha",
       segment: "equity",
@@ -1244,6 +1256,27 @@ export const BacktestsPage = () => {
                         }}
                       >
                         {JSON.stringify(paramDetail.params, null, 2)}
+                      </Typography>
+                    </Box>
+                  )}
+                  {selectedBacktest.risk_config && (
+                    <Box mt={2}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Backtest risk settings
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        component="pre"
+                        sx={{
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          whiteSpace: "pre-wrap",
+                          backgroundColor: "rgba(255,255,255,0.02)",
+                          p: 1,
+                          borderRadius: 1
+                        }}
+                      >
+                        {JSON.stringify(selectedBacktest.risk_config, null, 2)}
                       </Typography>
                     </Box>
                   )}
