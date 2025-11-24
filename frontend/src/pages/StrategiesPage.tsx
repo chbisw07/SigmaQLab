@@ -76,6 +76,11 @@ export const StrategiesPage = () => {
   const [engineFilter, setEngineFilter] = useState<string>("all");
 
   const [paramRegistry, setParamRegistry] = useState<StrategyParameter[]>([]);
+
+  const [selectedStrategyIds, setSelectedStrategyIds] = useState<Set<number>>(
+    () => new Set()
+  );
+
   const [baseParamJson, setBaseParamJson] = useState('{"fast": 10, "slow": 30}');
   const [baseParamNotes, setBaseParamNotes] = useState("");
   const [baseParamError, setBaseParamError] = useState<string | null>(null);
@@ -197,6 +202,15 @@ export const StrategiesPage = () => {
     }
     setNewEngineCode(next);
   }, [engineFilter, selectedStrategy, availableEngineCodes, newEngineCode]);
+
+  const filteredStrategies = strategies.filter(
+    (s) =>
+      engineFilter === "all" || (s.engine_code ?? "") === engineFilter
+  );
+
+  const allFilteredSelected =
+    filteredStrategies.length > 0 &&
+    filteredStrategies.every((s) => selectedStrategyIds.has(s.id));
 
   // Whenever the engine for a new strategy changes (including initial
   // defaulting), prefill the base params JSON and notes with sensible
@@ -602,6 +616,70 @@ export const StrategiesPage = () => {
     }
   };
 
+  const handleToggleStrategySelection = (id: number) => {
+    setSelectedStrategyIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectStrategiesOnPage = () => {
+    const idsOnPage = filteredStrategies.map((s) => s.id);
+    setSelectedStrategyIds((prev) => {
+      const next = new Set(prev);
+      const everySelected = idsOnPage.every((id) => next.has(id));
+      if (everySelected) {
+        idsOnPage.forEach((id) => next.delete(id));
+      } else {
+        idsOnPage.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleDeleteSelectedStrategies = async () => {
+    if (selectedStrategyIds.size === 0) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete ${selectedStrategyIds.size} strategy/strategies? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    const ids = Array.from(selectedStrategyIds);
+    for (const id of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await fetch(`${API_BASE}/api/strategies/${id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204 && res.status !== 404) {
+        // eslint-disable-next-line no-alert
+        window.alert(`Failed to delete strategy ${id}: HTTP ${res.status}`);
+        break;
+      }
+    }
+
+    setStrategies((prev) => prev.filter((s) => !selectedStrategyIds.has(s.id)));
+    setParamRegistry((prev) =>
+      prev.filter((p) => !selectedStrategyIds.has(p.strategy_id))
+    );
+    setSelectedStrategyIds(new Set());
+    if (selectedStrategy && selectedStrategyIds.has(selectedStrategy.id)) {
+      setSelectedStrategy(null);
+      setSelectedStrategyId(null);
+      setParams([]);
+      setDetailsOpen(false);
+    }
+  };
+
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
@@ -705,9 +783,41 @@ export const StrategiesPage = () => {
         <Grid item xs={12} md={8}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Strategies
-              </Typography>
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  mb: 1
+                }}
+              >
+                <Typography variant="h6">Strategies</Typography>
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 1,
+                    flexWrap: "wrap"
+                  }}
+                >
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={handleToggleSelectStrategiesOnPage}
+                    disabled={filteredStrategies.length === 0}
+                  >
+                    {allFilteredSelected ? "Unselect page" : "Select page"}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    onClick={handleDeleteSelectedStrategies}
+                    disabled={selectedStrategyIds.size === 0}
+                  >
+                    Delete selected
+                  </Button>
+                </Box>
+              </Box>
               {availableEngineCodes.length > 0 && (
                 <Box sx={{ mb: 1 }}>
                   <TextField
@@ -735,6 +845,7 @@ export const StrategiesPage = () => {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
+                      <TableCell />
                       <TableCell>Name</TableCell>
                       <TableCell>Code</TableCell>
                       <TableCell>Engine</TableCell>
@@ -744,30 +855,34 @@ export const StrategiesPage = () => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {strategies
-                      .filter(
-                        (s) =>
-                          engineFilter === "all" ||
-                          (s.engine_code ?? "") === engineFilter
-                      )
-                      .map((s) => (
-                        <TableRow
-                          key={s.id}
-                          hover
-                          selected={selectedStrategyId === s.id}
-                          onClick={() => handleSelectStrategy(s)}
-                          sx={{ cursor: "pointer" }}
-                        >
-                          <TableCell>{s.name}</TableCell>
-                          <TableCell>{s.code}</TableCell>
-                          <TableCell>{s.engine_code ?? ""}</TableCell>
-                          <TableCell>
-                            {defaultLabelByStrategy[s.id] ?? ""}
-                          </TableCell>
-                          <TableCell>{s.status ?? ""}</TableCell>
-                          <TableCell>{s.category ?? ""}</TableCell>
-                        </TableRow>
-                      ))}
+                    {filteredStrategies.map((s) => (
+                      <TableRow
+                        key={s.id}
+                        hover
+                        selected={selectedStrategyId === s.id}
+                        onClick={() => handleSelectStrategy(s)}
+                        sx={{ cursor: "pointer" }}
+                      >
+                        <TableCell padding="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={selectedStrategyIds.has(s.id)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleToggleStrategySelection(s.id);
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell>{s.name}</TableCell>
+                        <TableCell>{s.code}</TableCell>
+                        <TableCell>{s.engine_code ?? ""}</TableCell>
+                        <TableCell>
+                          {defaultLabelByStrategy[s.id] ?? ""}
+                        </TableCell>
+                        <TableCell>{s.status ?? ""}</TableCell>
+                        <TableCell>{s.category ?? ""}</TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               )}
