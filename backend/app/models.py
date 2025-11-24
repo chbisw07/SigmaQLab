@@ -1,6 +1,16 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -135,3 +145,69 @@ class BacktestTrade(Base):
     exit_reason = Column(String, nullable=True)
 
     backtest = relationship("Backtest", backref="trades")
+
+
+class Stock(Base):
+    """Universe of instruments that SigmaQLab can work with."""
+
+    __tablename__ = "stocks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    exchange = Column(String, nullable=False, index=True)
+    segment = Column(String, nullable=True)
+    name = Column(String, nullable=True)
+    sector = Column(String, nullable=True)
+    tags = Column(JSON, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    group_memberships = relationship("StockGroupMember", back_populates="stock")
+
+
+class StockGroup(Base):
+    """Named basket of stocks drawn from the universe."""
+
+    __tablename__ = "stock_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    tags = Column(JSON, nullable=True)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    members = relationship("StockGroupMember", back_populates="group")
+
+
+class StockGroupMember(Base):
+    """Membership link between StockGroup and Stock."""
+
+    __tablename__ = "stock_group_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("stock_groups.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+
+    group = relationship("StockGroup", back_populates="members")
+    stock = relationship("Stock", back_populates="group_memberships")

@@ -13,6 +13,9 @@ from .models import (
     Backtest,
     BacktestEquityPoint,
     BacktestTrade,
+    Stock,
+    StockGroup,
+    StockGroupMember,
     Strategy,
     StrategyParameter,
 )
@@ -337,6 +340,36 @@ class BacktestService:
         meta_db.commit()
 
         return backtest
+
+    def resolve_group_symbols(
+        self,
+        meta_db: Session,
+        *,
+        group_id: int,
+        active_only: bool = True,
+    ) -> list[str]:
+        """Return the list of symbols for a stock group.
+
+        This helper gives Backtest callers a single place to resolve a group's
+        members into tradable symbols and is intended to be reused by group
+        backtests in later sprints.
+        """
+
+        group = meta_db.get(StockGroup, group_id)
+        if group is None:
+            msg = f"StockGroup {group_id} not found"
+            raise ValueError(msg)
+
+        query = (
+            meta_db.query(Stock.symbol)
+            .join(StockGroupMember, Stock.id == StockGroupMember.stock_id)
+            .filter(StockGroupMember.group_id == group_id)
+        )
+        if active_only:
+            query = query.filter(Stock.is_active.is_(True))
+
+        symbols = [row[0] for row in query.order_by(Stock.symbol.asc()).all()]
+        return symbols
 
     def _apply_costs_indian_equity(
         self,

@@ -181,6 +181,131 @@ class StrategyParameterRead(StrategyParameterBase):
 
 
 # -------------------------
+# Stock universe schemas
+# -------------------------
+
+
+class StockBase(BaseModel):
+    """Common fields for Stock models."""
+
+    symbol: str = Field(..., description="Instrument symbol, e.g. HDFCBANK")
+    exchange: str = Field(
+        ...,
+        description="Logical exchange for the instrument (e.g. NSE, BSE, NYSE)",
+    )
+    segment: str | None = Field(
+        default=None,
+        description="Market segment, e.g. equity, fno (optional)",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Human-friendly instrument name, e.g. HDFC Bank Ltd.",
+    )
+    sector: str | None = Field(default=None, description="Sector/industry label")
+    tags: list[str] | None = Field(
+        default=None,
+        description="Optional list of tags, e.g. ['bank', 'nifty50', 'midcap']",
+    )
+    is_active: bool = Field(
+        default=True,
+        description="Whether the stock is active in the research universe",
+    )
+
+
+class StockCreate(StockBase):
+    """Payload to create a new stock in the universe."""
+
+    pass
+
+
+class StockUpdate(BaseModel):
+    """Partial update payload for a stock."""
+
+    symbol: str | None = None
+    exchange: str | None = None
+    segment: str | None = None
+    name: str | None = None
+    sector: str | None = None
+    tags: list[str] | None = None
+    is_active: bool | None = None
+
+
+class StockRead(StockBase):
+    """Stock representation returned by the API."""
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = SettingsConfigDict(from_attributes=True)
+
+
+class StockGroupBase(BaseModel):
+    """Common fields for stock groups."""
+
+    code: str = Field(
+        ...,
+        description="Short identifier for the group, e.g. TRENDING_STOCKS",
+    )
+    name: str = Field(..., description="Human-friendly group name")
+    description: str | None = Field(
+        default=None, description="Purpose/definition of this basket"
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="Optional tags, e.g. ['midcap', 'banking']",
+    )
+
+
+class StockGroupCreate(StockGroupBase):
+    """Payload to create a new stock group."""
+
+    stock_ids: list[int] | None = Field(
+        default=None,
+        description="Optional initial list of stock IDs to add as members",
+    )
+
+
+class StockGroupUpdate(BaseModel):
+    """Partial update payload for a stock group (metadata only)."""
+
+    code: str | None = None
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+
+
+class StockGroupRead(StockGroupBase):
+    """Stock group representation returned by the API."""
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    stock_count: int = Field(
+        0,
+        description="Number of member stocks in this group",
+    )
+
+    model_config = SettingsConfigDict(from_attributes=True)
+
+
+class StockGroupDetail(StockGroupRead):
+    """Stock group including full member details."""
+
+    members: list[StockRead]
+
+
+class StockGroupMembersUpdate(BaseModel):
+    """Payload to add one or more stocks to a group."""
+
+    stock_ids: list[int] = Field(
+        ...,
+        description="IDs of stocks to add as members of this group",
+        min_length=1,
+    )
+
+
+# -------------------------
 # Backtest service schemas
 # -------------------------
 
