@@ -5,7 +5,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Strategy, StrategyParameter
+from ..models import (
+    Backtest,
+    BacktestEquityPoint,
+    BacktestTrade,
+    Strategy,
+    StrategyParameter,
+)
 from ..schemas import (
     StrategyCreate,
     StrategyParameterCreate,
@@ -112,10 +118,23 @@ async def delete_strategy(
 ) -> None:
     strategy = _get_strategy_or_404(db, strategy_id)
 
-    # Delete associated parameters first due to FK constraint.
+    # Delete associated backtests (and their child rows) for this strategy so
+    # users can clean up the strategy library even after running backtests.
+    backtests = db.query(Backtest).filter(Backtest.strategy_id == strategy.id).all()
+    for bt in backtests:
+        db.query(BacktestEquityPoint).filter(
+            BacktestEquityPoint.backtest_id == bt.id
+        ).delete(synchronize_session=False)
+        db.query(BacktestTrade).filter(BacktestTrade.backtest_id == bt.id).delete(
+            synchronize_session=False
+        )
+        db.delete(bt)
+
+    # Delete associated parameters after backtests so there are no dangling
+    # references from backtests.params_id when foreign keys are enforced.
     db.query(StrategyParameter).filter(
         StrategyParameter.strategy_id == strategy.id
-    ).delete()
+    ).delete(synchronize_session=False)
     db.delete(strategy)
     db.commit()
 

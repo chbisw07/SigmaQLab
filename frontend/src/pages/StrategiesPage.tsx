@@ -62,7 +62,7 @@ export const StrategiesPage = () => {
 
   const [createState, setCreateState] = useState<FetchState>("idle");
   const [createMessage, setCreateMessage] = useState<string | null>(null);
-  const [newCode, setNewCode] = useState("");
+  const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newEngineCode, setNewEngineCode] = useState("");
 
@@ -360,18 +360,25 @@ export const StrategiesPage = () => {
         return;
       }
 
-      const code = newCode.trim().toUpperCase();
-      if (!code) {
+      const name = newName.trim();
+      if (!name) {
         setCreateState("error");
-        setCreateMessage("Code is required for a new strategy.");
+        setCreateMessage("Name is required for a new strategy.");
         return;
       }
 
-      const derivedName = code;
+      // Derive a code from the name by uppercasing and normalising to
+      // alphanumeric + underscore. This keeps the internal identifier stable
+      // without requiring the user to manage it explicitly.
+      const baseCode = name
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      const code = baseCode || "STRATEGY";
       const baseLabel = `${code.toLowerCase()}_default`;
 
       const payload = {
-        name: derivedName,
+        name,
         code,
         category: newCategory || null,
         description: null,
@@ -422,8 +429,8 @@ export const StrategiesPage = () => {
       setSelectedStrategyId(created.id);
       setSelectedStrategy(created);
       setCreateState("success");
-      setCreateMessage(`Strategy '${created.code}' created.`);
-      setNewCode("");
+      setCreateMessage(`Strategy '${created.name}' created.`);
+      setNewName("");
       setNewCategory("");
       setNewEngineCode(engineCode);
     } catch (error) {
@@ -696,9 +703,9 @@ export const StrategiesPage = () => {
                   <TextField
                     fullWidth
                     margin="normal"
-                    label="Code"
-                    value={newCode}
-                    onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+                    label="Name"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
                   />
                   <TextField
                     fullWidth
@@ -847,7 +854,6 @@ export const StrategiesPage = () => {
                     <TableRow>
                       <TableCell />
                       <TableCell>Name</TableCell>
-                      <TableCell>Code</TableCell>
                       <TableCell>Engine</TableCell>
                       <TableCell>Params</TableCell>
                       <TableCell>Status</TableCell>
@@ -874,7 +880,6 @@ export const StrategiesPage = () => {
                           />
                         </TableCell>
                         <TableCell>{s.name}</TableCell>
-                        <TableCell>{s.code}</TableCell>
                         <TableCell>{s.engine_code ?? ""}</TableCell>
                         <TableCell>
                           {defaultLabelByStrategy[s.id] ?? ""}

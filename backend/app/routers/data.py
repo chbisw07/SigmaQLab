@@ -87,38 +87,32 @@ async def get_data_summary(
         .all()
     )
 
-    return [
-        DataSummaryItem(
-            coverage_id=_build_coverage_id(symbol, exchange, source),
-            symbol=symbol,
-            exchange=exchange,
-            timeframe=timeframe,
-            source=source,
-            start_timestamp=start_ts,
-            end_timestamp=end_ts,
-            bar_count=bar_count,
+    summary_items: list[DataSummaryItem] = []
+    for idx, (
+        symbol,
+        exchange,
+        timeframe,
+        source,
+        start_ts,
+        end_ts,
+        bar_count,
+    ) in enumerate(rows, start=1):
+        coverage_id = f"FS_{idx:05d}"
+        summary_items.append(
+            DataSummaryItem(
+                coverage_id=coverage_id,
+                symbol=symbol,
+                exchange=exchange,
+                timeframe=timeframe,
+                source=source,
+                start_timestamp=start_ts,
+                end_timestamp=end_ts,
+                bar_count=bar_count,
+            )
         )
-        for symbol, exchange, timeframe, source, start_ts, end_ts, bar_count in rows
-    ]
-
-
-def _build_coverage_id(
-    symbol: str,
-    exchange: str | None,
-    source: str | None,
-) -> str:
-    """Return a stable coverage identifier for a (symbol, exchange, source).
-
-    For now we expose a single synthetic coverage per combination using a
-    zero-padded sequence suffix. This keeps the identifier stable while
-    leaving room for future extensions where multiple coverage windows could
-    be tracked explicitly.
-    """
-
-    ex = (exchange or "NA").upper()
-    src = (source or "NA").lower()
-    sequence = 0
-    return f"{symbol}_{ex}_{src}_{sequence:05d}"
+    # Present newest-style coverage IDs first (highest sequence number).
+    summary_items.sort(key=lambda item: item.coverage_id, reverse=True)
+    return summary_items
 
 
 @router.delete("/bars", status_code=204)
