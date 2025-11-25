@@ -441,7 +441,7 @@ class BacktestService:
                 initial_capital=initial_capital,
                 params=resolved_params,
                 risk_config=risk_config,
-                costs_config=None,
+                costs_config=costs_config,
             )
             result = self._engine.run(cfg, df)
             for trade in result.trades:
@@ -686,6 +686,31 @@ class BacktestService:
         if not candidate_trades:
             return [], []
 
+        # Helper to look up a close price from a symbol's DataFrame. For entry
+        # we prefer the first bar at or after the timestamp; for exit we prefer
+        # the last bar at or before the timestamp.
+        def _lookup_price(
+            symbol: str,
+            ts: datetime,
+            *,
+            prefer: str,
+        ) -> float:
+            df = price_data_by_symbol.get(symbol)
+            if df is None or df.empty:
+                return 0.0
+            idx = df.index
+            if ts in idx:
+                return float(df.loc[ts, "close"])
+            pos = idx.searchsorted(ts)
+            if prefer == "after":
+                if pos >= len(idx):
+                    return float(df.iloc[-1]["close"])
+                return float(df.iloc[pos]["close"])
+            # prefer == "before"
+            if pos == 0:
+                return float(df.iloc[0]["close"])
+            return float(df.iloc[pos - 1]["close"])
+
         # Normalise and group candidate entries by timestamp.
         entries_by_time: Dict[datetime, List[TradeRecord]] = {}
         for trade in candidate_trades:
@@ -810,10 +835,15 @@ class BacktestService:
 
                     cash_available = cash
                     base_size = float(candidate.size)
+                    entry_price = _lookup_price(
+                        candidate.symbol,
+                        candidate.entry_timestamp,
+                        prefer="after",
+                    )
                     size = _compute_order_size(
                         symbol=candidate.symbol,
                         side=side,
-                        entry_price=candidate.entry_price,
+                        entry_price=entry_price,
                         equity=equity_before,
                         cash_available=cash_available,
                         max_candidate_size=base_size,
@@ -822,7 +852,7 @@ class BacktestService:
                         # Try next candidate at this timestamp.
                         continue
 
-                    price = float(candidate.entry_price)
+                    price = entry_price
                     symbol = candidate.symbol
                     if side == "long":
                         cash -= size * price
@@ -835,7 +865,11 @@ class BacktestService:
                     last_prices[symbol] = price
 
                     # Compute PnL at exit based on price difference.
-                    exit_price = float(candidate.exit_price)
+                    exit_price = _lookup_price(
+                        symbol,
+                        candidate.exit_timestamp,
+                        prefer="before",
+                    )
                     pnl_per_share = (exit_price - price) * (
                         1.0 if side == "long" else -1.0
                     )
@@ -850,6 +884,8 @@ class BacktestService:
                         exit_timestamp=candidate.exit_timestamp,
                         exit_price=exit_price,
                         pnl=pnl,
+                        entry_reason=candidate.entry_reason,
+                        exit_reason=candidate.exit_reason,
                     )
                     exits_by_time.setdefault(candidate.exit_timestamp, []).append(trade)
                     # We only open one trade per timestamp under the current policy.

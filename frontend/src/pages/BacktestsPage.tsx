@@ -1068,12 +1068,21 @@ export const BacktestsPage = () => {
                       <Grid container spacing={2}>
                         <Grid item xs={6}>
                           <TextField
+                            select
                             fullWidth
                             margin="normal"
                             label="Interval"
                             value={timeframe}
                             onChange={(e) => setTimeframe(e.target.value)}
-                          />
+                          >
+                            <MenuItem value="1m">1 minute</MenuItem>
+                            <MenuItem value="3m">3 minutes</MenuItem>
+                            <MenuItem value="5m">5 minutes</MenuItem>
+                            <MenuItem value="15m">15 minutes</MenuItem>
+                            <MenuItem value="30m">30 minutes</MenuItem>
+                            <MenuItem value="1h">1 hour</MenuItem>
+                            <MenuItem value="1d">1 day</MenuItem>
+                          </TextField>
                           <TextField
                             fullWidth
                             margin="normal"

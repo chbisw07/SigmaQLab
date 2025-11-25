@@ -614,7 +614,6 @@ export const DataPage = () => {
         <Grid item xs={12} md={5}>
           <Card
             sx={{
-              height: 460,
               display: "flex",
               flexDirection: "column"
             }}
