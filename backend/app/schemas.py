@@ -34,6 +34,23 @@ class DataFetchRequest(BaseModel):
         description="Logical exchange for the instrument (e.g. NSE, BSE, NYSE)",
     )
 
+    # Target scope for the fetch operation. By default we fetch data for a
+    # single symbol; when 'group' or 'universe' is selected the backend will
+    # iterate over the relevant stocks and fetch data for each.
+    target: Literal["symbol", "group", "universe"] = Field(
+        "symbol",
+        description="Fetch target: 'symbol' (single stock), 'group', or 'universe'.",
+    )
+    group_id: int | None = Field(
+        default=None,
+        description="Stock group id when target='group'.",
+    )
+
+    # Optional intraday session times. When omitted, the backend defaults to
+    # the standard India cash session of 09:15–15:30 IST.
+    start_time: time | None = None
+    end_time: time | None = None
+
 
 class DataFetchResponse(BaseModel):
     """Response payload summarising a data fetch operation."""
@@ -52,8 +69,8 @@ class DataSummaryItem(BaseModel):
     coverage_id: str = Field(
         ...,
         description=(
-            "Stable fetch-sequence identifier of the form 'FS_<NNNNN>' "
-            "assigned when data is fetched."
+            "Stable fetch-sequence identifier of the form "
+            "'<SYMBOL>_<NNNNN>' assigned when data is fetched."
         ),
     )
     symbol: str

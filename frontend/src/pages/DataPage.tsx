@@ -85,6 +85,15 @@ type PreviewRangePreset =
 
 const API_BASE = "http://127.0.0.1:8000";
 
+type FetchTarget = "symbol" | "group" | "universe";
+
+type StockGroup = {
+  id: number;
+  code: string;
+  name: string;
+  stock_count: number;
+};
+
 export const DataPage = () => {
   const { chartThemeId } = useAppearance();
   const [symbol, setSymbol] = useState("HDFCBANK");
@@ -93,8 +102,13 @@ export const DataPage = () => {
   const [source, setSource] = useState<"kite" | "yfinance">("kite");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [startTime, setStartTime] = useState("09:15");
+  const [endTime, setEndTime] = useState("15:30");
   const [fetchState, setFetchState] = useState<FetchState>("idle");
   const [fetchMessage, setFetchMessage] = useState<string | null>(null);
+  const [fetchTarget, setFetchTarget] = useState<FetchTarget>("symbol");
+  const [stockGroups, setStockGroups] = useState<StockGroup[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<number | "">("");
 
   const [summary, setSummary] = useState<DataSummaryItem[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
@@ -132,7 +146,26 @@ export const DataPage = () => {
     const iso = today.toISOString().slice(0, 10);
     setStartDate(iso);
     setEndDate(iso);
+    setStartTime("09:15");
+    setEndTime("15:30");
   }, []);
+
+  useEffect(() => {
+    const loadGroups = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/stock-groups`);
+        if (!res.ok) return;
+        const data: StockGroup[] = await res.json();
+        setStockGroups(data);
+        if (data.length > 0 && selectedGroupId === "") {
+          setSelectedGroupId(data[0].id);
+        }
+      } catch {
+        // ignore; Data page will still work for single-symbol fetches
+      }
+    };
+    loadGroups();
+  }, [selectedGroupId]);
 
   useEffect(() => {
     const computeIndicators = (data: PriceBarPreview[]): PreviewWithIndicators[] => {
@@ -444,6 +477,17 @@ export const DataPage = () => {
     setFetchMessage(null);
 
     try {
+      if (fetchTarget === "symbol" && !symbol.trim()) {
+        setFetchState("error");
+        setFetchMessage("Provide a symbol when fetching data for a single stock.");
+        return;
+      }
+      if (fetchTarget === "group" && !selectedGroupId) {
+        setFetchState("error");
+        setFetchMessage("Select a stock group when fetching data for a portfolio.");
+        return;
+      }
+
       const res = await fetch(`${API_BASE}/api/data/fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -453,7 +497,11 @@ export const DataPage = () => {
           start_date: startDate,
           end_date: endDate,
           source,
-          exchange
+          exchange,
+          target: fetchTarget,
+          group_id: fetchTarget === "group" ? selectedGroupId : null,
+          start_time: startTime || null,
+          end_time: endTime || null
         })
       });
 
@@ -615,7 +663,7 @@ export const DataPage = () => {
         <Grid item xs={12} md={5}>
           <Card
             sx={{
-              height: 550,
+              height: 800,
               display: "flex",
               flexDirection: "column"
             }}
@@ -626,12 +674,54 @@ export const DataPage = () => {
               </Typography>
               <Box component="form" onSubmit={handleFetch} noValidate>
                 <TextField
+                  select
+                  fullWidth
+                  margin="normal"
+                  label="Target"
+                  value={fetchTarget}
+                  onChange={(e) => setFetchTarget(e.target.value as FetchTarget)}
+                >
+                  <MenuItem value="symbol">Single stock</MenuItem>
+                  <MenuItem value="group">Stock group (portfolio)</MenuItem>
+                  <MenuItem value="universe">Universe (all active stocks)</MenuItem>
+                </TextField>
+                <TextField
                   fullWidth
                   margin="normal"
                   label="Symbol"
                   value={symbol}
                   onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                  disabled={fetchTarget !== "symbol"}
                 />
+                {fetchTarget === "group" && (
+                  <TextField
+                    select
+                    fullWidth
+                    margin="normal"
+                    label="Stock group"
+                    value={selectedGroupId}
+                    onChange={(e) =>
+                      setSelectedGroupId(
+                        e.target.value === "" ? "" : Number(e.target.value)
+                      )
+                    }
+                    helperText={
+                      stockGroups.length === 0
+                        ? "Define stock groups on the Stocks page before fetching as a portfolio."
+                        : "Select a stock group to fetch data for all its members."
+                    }
+                  >
+                    {stockGroups.length === 0 ? (
+                      <MenuItem value="">No groups available</MenuItem>
+                    ) : (
+                      stockGroups.map((g) => (
+                        <MenuItem key={g.id} value={g.id}>
+                          {g.code} – {g.name} ({g.stock_count})
+                        </MenuItem>
+                      ))
+                    )}
+                  </TextField>
+                )}
                 <TextField
                   select
                   fullWidth
@@ -699,6 +789,30 @@ export const DataPage = () => {
                     />
                   </Grid>
                 </Grid>
+                <Grid container spacing={2}>
+                  <Grid item xs={6}>
+                    <TextField
+                      fullWidth
+                      margin="normal"
+                      label="Start time"
+                      type="time"
+                      InputLabelProps={{ shrink: true }}
+                      value={startTime}
+                      onChange={(e) => setStartTime(e.target.value)}
+                    />
+                  </Grid>
+                  <Grid item xs={6}>
+                    <TextField
+                      fullWidth
+                      margin="normal"
+                      label="End time"
+                      type="time"
+                      InputLabelProps={{ shrink: true }}
+                      value={endTime}
+                      onChange={(e) => setEndTime(e.target.value)}
+                    />
+                  </Grid>
+                </Grid>
 
                 <Box mt={2}>
                   <Button
@@ -726,7 +840,7 @@ export const DataPage = () => {
         <Grid item xs={12} md={7}>
           <Card
             sx={{
-              height: 550,
+              height: 800,
               display: "flex",
               flexDirection: "column"
             }}

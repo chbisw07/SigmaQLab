@@ -51,9 +51,10 @@ def test_data_summary_and_preview_from_csv(tmp_path: Path) -> None:
     assert matching, "Expected TEST2 / 5m entry in data summary"
     item = matching[0]
     assert item["bar_count"] == 2
-    # Coverage rows should expose a stable coverage_id with fetch-sequence style.
+    # Coverage rows should expose a stable coverage_id with fetch-sequence style,
+    # prefixed by the symbol (e.g. TEST2_00001).
     assert "coverage_id" in item
-    assert item["coverage_id"].startswith("FS_")
+    assert item["coverage_id"].startswith("TEST2_")
 
     # Preview endpoint should return the actual bars.
     res_prev = client.get("/api/data/TEST2/preview", params={"timeframe": "5m"})
