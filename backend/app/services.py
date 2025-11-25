@@ -7,7 +7,7 @@ from typing import List
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from .prices_models import PriceBar
+from .prices_models import PriceBar, PriceFetch
 
 
 class ProviderUnavailableError(RuntimeError):
@@ -250,18 +250,50 @@ def fetch_ohlcv_from_kite(
 
     interval = _map_timeframe_to_kite_interval(timeframe)
 
-    records = kite.historical_data(
-        instrument_token=instrument_token,
-        from_date=start,
-        to_date=end,
-        interval=interval,
-    )
+    # Zerodha imposes maximum lookback windows per interval. To support
+    # arbitrary start/end ranges from the UI we chunk the request into
+    # multiple windows where necessary and stitch the results together.
+    #
+    # See: https://kite.trade/forum/discussion/3081/is-there-any-limitation-on-getting-historical-data
+    max_days_by_interval = {
+        "minute": 60,
+        "3minute": 100,
+        "5minute": 100,
+        "10minute": 100,
+        "15minute": 200,
+        "30minute": 200,
+        "60minute": 400,
+        "day": 2000,
+    }
+    max_days = max_days_by_interval.get(interval)
 
-    bars: List[OHLCVBar] = []
-    for rec in records:
-        bars.append(
-            OHLCVBar(
-                timestamp=rec["date"],
+    if max_days is None or end <= start:
+        windows = [(start, end)]
+    else:
+        windows: list[tuple[datetime, datetime]] = []
+        cursor = start
+        window_size = timedelta(days=max_days)
+        while cursor < end:
+            window_end = min(cursor + window_size, end)
+            windows.append((cursor, window_end))
+            cursor = window_end
+
+    # Collect records across all windows and de-duplicate by timestamp so we
+    # never insert duplicate bars into the prices DB even if Kite returns
+    # overlapping data at window boundaries.
+    seen: dict[datetime, OHLCVBar] = {}
+
+    for window_start, window_end in windows:
+        records = kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=window_start,
+            to_date=window_end,
+            interval=interval,
+        )
+        for rec in records:
+            ts = rec["date"]
+            bar = OHLCVBar(
+                timestamp=ts,
                 open=float(rec["open"]),
                 high=float(rec["high"]),
                 low=float(rec["low"]),
@@ -269,7 +301,9 @@ def fetch_ohlcv_from_kite(
                 volume=float(rec.get("volume")) if "volume" in rec else None,
                 source="kite",
             )
-        )
+            seen[ts] = bar
+
+    bars = sorted(seen.values(), key=lambda b: b.timestamp)
     return bars
 
 
@@ -327,6 +361,12 @@ class DataService:
         if not bars:
             return 0
 
+        # Derive basic coverage metadata from the fetched bars. We assume all
+        # bars share the same source label.
+        start_ts = min(bar.timestamp for bar in bars)
+        end_ts = max(bar.timestamp for bar in bars)
+        coverage_source = bars[0].source
+
         # Remove any existing bars in the requested window to avoid duplicates.
         db.execute(
             delete(PriceBar).where(
@@ -352,6 +392,19 @@ class DataService:
                 source=bar.source,
             )
             for bar in bars
+        )
+
+        # Record this fetch operation so that coverage summary rows can use a
+        # stable, monotonically increasing identifier and sort by recency.
+        db.add(
+            PriceFetch(
+                symbol=symbol,
+                exchange=ex,
+                timeframe=timeframe,
+                source=coverage_source,
+                start_timestamp=start_ts,
+                end_timestamp=end_ts,
+            )
         )
 
         db.commit()

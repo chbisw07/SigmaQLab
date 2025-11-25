@@ -167,6 +167,7 @@ type DataSummaryItem = {
   start_timestamp: string;
   end_timestamp: string;
   bar_count: number;
+  created_at: string;
 };
 
 const API_BASE = "http://127.0.0.1:8000";

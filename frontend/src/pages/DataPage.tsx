@@ -33,6 +33,7 @@ type DataSummaryItem = {
   start_timestamp: string;
   end_timestamp: string;
   bar_count: number;
+  created_at: string;
 };
 
 type PriceBarPreview = {
@@ -788,6 +789,7 @@ export const DataPage = () => {
                         <TableCell>Exchange</TableCell>
                         <TableCell>Timeframe</TableCell>
                         <TableCell>Source</TableCell>
+                        <TableCell>Created</TableCell>
                         <TableCell>Start</TableCell>
                         <TableCell>End</TableCell>
                         <TableCell align="right">Bars</TableCell>
@@ -819,6 +821,11 @@ export const DataPage = () => {
                             <TableCell>{row.exchange ?? ""}</TableCell>
                             <TableCell>{row.timeframe}</TableCell>
                             <TableCell>{row.source ?? ""}</TableCell>
+                            <TableCell>
+                              {new Date(row.created_at).toLocaleString("en-IN", {
+                                timeZone: "Asia/Kolkata"
+                              })}
+                            </TableCell>
                             <TableCell>
                               {new Date(row.start_timestamp).toLocaleString("en-IN", {
                                 timeZone: "Asia/Kolkata"

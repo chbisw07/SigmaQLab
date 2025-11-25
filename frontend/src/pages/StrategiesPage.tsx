@@ -50,6 +50,11 @@ type FetchState = "idle" | "loading" | "success" | "error";
 
 const API_BASE = "http://127.0.0.1:8000";
 
+// Known engine implementation codes in the backend strategy registry.
+// We keep this list here so that users can always create strategies for
+// supported engines even if no existing strategy currently uses them.
+const KNOWN_ENGINE_CODES = ["SmaCrossStrategy", "ZeroLagTrendMtfStrategy"];
+
 export const StrategiesPage = () => {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(
@@ -177,11 +182,14 @@ export const StrategiesPage = () => {
   }, [selectedStrategyId]);
 
   const availableEngineCodes = Array.from(
-    new Set(
-      strategies
+    new Set([
+      // Always include known engines from the backend registry so they remain
+      // selectable even if there is no existing strategy using them yet.
+      ...KNOWN_ENGINE_CODES,
+      ...strategies
         .map((s) => s.engine_code)
         .filter((code): code is string => Boolean(code))
-    )
+    ])
   );
 
   // Default the new strategy's engine code based on current context:

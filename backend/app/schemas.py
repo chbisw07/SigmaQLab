@@ -52,8 +52,8 @@ class DataSummaryItem(BaseModel):
     coverage_id: str = Field(
         ...,
         description=(
-            "Stable coverage identifier of the form "
-            "<symbol>_<exchange>_<source>_<NNNNN>."
+            "Stable fetch-sequence identifier of the form 'FS_<NNNNN>' "
+            "assigned when data is fetched."
         ),
     )
     symbol: str
@@ -63,6 +63,10 @@ class DataSummaryItem(BaseModel):
     start_timestamp: datetime
     end_timestamp: datetime
     bar_count: int
+    created_at: datetime = Field(
+        ...,
+        description="Timestamp when this symbol/timeframe/source was last fetched.",
+    )
 
 
 class PriceBarPreview(BaseModel):

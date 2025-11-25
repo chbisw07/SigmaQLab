@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..prices_database import get_prices_db
-from ..prices_models import PriceBar
+from ..prices_models import PriceBar, PriceFetch
 from ..schemas import (
     DataFetchRequest,
     DataFetchResponse,
@@ -88,7 +88,7 @@ async def get_data_summary(
     )
 
     summary_items: list[DataSummaryItem] = []
-    for idx, (
+    for (
         symbol,
         exchange,
         timeframe,
@@ -96,8 +96,28 @@ async def get_data_summary(
         start_ts,
         end_ts,
         bar_count,
-    ) in enumerate(rows, start=1):
-        coverage_id = f"FS_{idx:05d}"
+    ) in rows:
+        latest_fetch = (
+            db.query(PriceFetch)
+            .filter(
+                PriceFetch.symbol == symbol,
+                PriceFetch.exchange == exchange,
+                PriceFetch.timeframe == timeframe,
+                PriceFetch.source == source,
+            )
+            .order_by(PriceFetch.id.desc())
+            .first()
+        )
+        if latest_fetch is not None:
+            seq = latest_fetch.id
+            created_at = latest_fetch.created_at
+        else:
+            # Legacy data created before fetch metadata existed: synthesise a
+            # neutral identifier and use the coverage end timestamp.
+            seq = 0
+            created_at = end_ts
+
+        coverage_id = f"FS_{seq:05d}"
         summary_items.append(
             DataSummaryItem(
                 coverage_id=coverage_id,
@@ -108,10 +128,14 @@ async def get_data_summary(
                 start_timestamp=start_ts,
                 end_timestamp=end_ts,
                 bar_count=bar_count,
+                created_at=created_at,
             )
         )
-    # Present newest-style coverage IDs first (highest sequence number).
-    summary_items.sort(key=lambda item: item.coverage_id, reverse=True)
+    # Present most recently fetched coverage first; break ties by identifier.
+    summary_items.sort(
+        key=lambda item: (item.created_at, item.coverage_id),
+        reverse=True,
+    )
     return summary_items
 
 
