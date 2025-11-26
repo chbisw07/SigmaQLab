@@ -9,6 +9,7 @@ import {
   DialogTitle,
   FormControlLabel,
   Grid,
+  IconButton,
   MenuItem,
   Switch,
   Table,
@@ -19,9 +20,13 @@ import {
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography
 } from "@mui/material";
 import { FormEvent, useEffect, useState } from "react";
+import CloseIcon from "@mui/icons-material/Close";
+import FileDownloadIcon from "@mui/icons-material/FileDownload";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { BacktestDetailChart } from "../features/backtests/components/BacktestDetailChart";
 import { useAppearance } from "../appearanceContext";
 
@@ -170,6 +175,11 @@ type DataSummaryItem = {
   created_at: string;
 };
 
+type DetailTab = {
+  id: number;
+  label: string;
+};
+
 const API_BASE = "http://127.0.0.1:8000";
 
 export const BacktestsPage = () => {
@@ -264,6 +274,11 @@ export const BacktestsPage = () => {
   const [settingsNotes, setSettingsNotes] = useState("");
   const [settingsState, setSettingsState] = useState<FetchState>("idle");
   const [settingsError, setSettingsError] = useState<string | null>(null);
+
+  const [detailTabs, setDetailTabs] = useState<DetailTab[]>([]);
+  const [activeDetailTabId, setActiveDetailTabId] = useState<number | null>(
+    null
+  );
 
   const resetRunFormDefaults = () => {
     setSelectedStrategyId(null);
@@ -589,8 +604,8 @@ export const BacktestsPage = () => {
       const created: Backtest = await res.json();
       setBacktests((prev) => [created, ...prev]);
       setPage(0);
-      // Load detail for the newly created backtest.
-      void handleSelectBacktest(created);
+      // Load detail for the newly created backtest and open a tab.
+      void openBacktestDetail(created, true);
       setRunState("success");
 
       const metrics = created.metrics;
@@ -634,6 +649,26 @@ export const BacktestsPage = () => {
     }
   };
 
+  const formatCreatedAt = (iso: string) => {
+    try {
+      const base = new Date(iso);
+      // Backtest created_at is stored in UTC; adjust by +5:30 to match IST.
+      const istMs = base.getTime() + 5.5 * 60 * 60 * 1000;
+      const istDate = new Date(istMs);
+      return istDate.toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
+      });
+    } catch {
+      return iso;
+    }
+  };
+
   const getStrategyLabel = (strategyId: number) => {
     const strategy = strategies.find((s) => s.id === strategyId);
     if (!strategy) return String(strategyId);
@@ -661,7 +696,22 @@ export const BacktestsPage = () => {
     page * pageSize + pageSize
   );
 
-  const handleSelectBacktest = async (backtest: Backtest) => {
+  const openBacktestDetail = async (
+    backtest: Backtest,
+    addTab: boolean
+  ) => {
+    if (addTab) {
+      setDetailTabs((prev) => {
+        if (prev.some((t) => t.id === backtest.id)) {
+          return prev;
+        }
+        const label = `#${backtest.id} – ${getStrategyLabel(
+          backtest.strategy_id
+        )}`;
+        return [...prev, { id: backtest.id, label }];
+      });
+    }
+    setActiveDetailTabId(backtest.id);
     setSelectedBacktestId(backtest.id);
     setSelectedBacktest(backtest);
     setDetailState("loading");
@@ -708,6 +758,34 @@ export const BacktestsPage = () => {
       setDetailError(
         error instanceof Error ? error.message : "Failed to load backtest detail"
       );
+    }
+  };
+
+  const handleDetailTabChange = (
+    _: React.SyntheticEvent,
+    value: number
+  ) => {
+    const bt = backtests.find((b) => b.id === value);
+    if (!bt) return;
+    void openBacktestDetail(bt, false);
+  };
+
+  const handleCloseDetailTab = (
+    event: React.MouseEvent,
+    id: number
+  ) => {
+    event.stopPropagation();
+    setDetailTabs((prev) => prev.filter((t) => t.id !== id));
+    if (activeDetailTabId === id) {
+      setActiveDetailTabId(null);
+      setSelectedBacktestId(null);
+      setSelectedBacktest(null);
+      setEquity([]);
+      setTrades([]);
+      setPriceBars([]);
+      setProjection([]);
+      setIndicators({});
+      setShowTradesTable(false);
     }
   };
 
@@ -1298,6 +1376,7 @@ export const BacktestsPage = () => {
                         <TableCell align="right">PnL</TableCell>
                         <TableCell align="right">Final value</TableCell>
                         <TableCell>Created</TableCell>
+                        <TableCell align="right">Actions</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -1306,7 +1385,9 @@ export const BacktestsPage = () => {
                           key={b.id}
                           hover
                           selected={selectedBacktestId === b.id}
-                          onClick={() => handleSelectBacktest(b)}
+                          onClick={() => {
+                            void openBacktestDetail(b, true);
+                          }}
                           sx={{ cursor: "pointer" }}
                         >
                           <TableCell padding="checkbox">
@@ -1336,7 +1417,34 @@ export const BacktestsPage = () => {
                               ? b.metrics.final_value.toFixed(2)
                               : ""}
                           </TableCell>
-                          <TableCell>{formatDateTime(b.created_at)}</TableCell>
+                          <TableCell>{formatCreatedAt(b.created_at)}</TableCell>
+                          <TableCell align="right">
+                            <Tooltip title="Open details tab">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void openBacktestDetail(b, true);
+                                }}
+                              >
+                                <OpenInNewIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Export trades CSV">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.open(
+                                    `${API_BASE}/api/backtests/${b.id}/trades/export`,
+                                    "_blank"
+                                  );
+                                }}
+                              >
+                                <FileDownloadIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -1348,55 +1456,88 @@ export const BacktestsPage = () => {
         </Grid>
       </Grid>
 
-      {selectedBacktest && (
+      {detailTabs.length > 0 && (
         <Box mt={3}>
           <Card>
             <CardContent>
-              <Box
-                sx={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  mb: 1
-                }}
+              <Tabs
+                value={activeDetailTabId ?? false}
+                onChange={handleDetailTabChange}
+                variant="scrollable"
+                scrollButtons="auto"
               >
-                <Typography variant="h6">
-                  Backtest Details – #{selectedBacktest.id}
-                </Typography>
-                <Box sx={{ display: "flex", gap: 1 }}>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => setChartFullscreenOpen(true)}
-                  >
-                    Fullscreen chart
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      if (!selectedBacktest) return;
-                      setSettingsError(null);
-                      setSettingsState("idle");
-                      setSettingsTab("visual");
-                      setSettingsLabel(selectedBacktest.label ?? "");
-                      setSettingsNotes(selectedBacktest.notes ?? "");
-                      const vc = (selectedBacktest.visual_config ??
-                        {}) as VisualConfig;
-                      setVisualSettings({
-                        showTradeMarkers: vc.showTradeMarkers ?? true,
-                        showProjection: vc.showProjection ?? true,
-                        showVolume: vc.showVolume ?? true,
-                        showEquityCurve: vc.showEquityCurve ?? true
-                      });
-                      setSettingsOpen(true);
-                    }}
-                  >
-                    Settings
-                  </Button>
-                </Box>
-              </Box>
-              <Grid container spacing={3}>
+                {detailTabs.map((tab) => (
+                  <Tab
+                    key={tab.id}
+                    value={tab.id}
+                    label={
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.5
+                        }}
+                      >
+                        <span>{tab.label}</span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleCloseDetailTab(e, tab.id)}
+                        >
+                          <CloseIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    }
+                  />
+                ))}
+              </Tabs>
+              <Box mt={2}>
+                {selectedBacktest && activeDetailTabId === selectedBacktest.id ? (
+                  <Box>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        mb: 1
+                      }}
+                    >
+                      <Typography variant="h6">
+                        Backtest Details – #{selectedBacktest.id}
+                      </Typography>
+                      <Box sx={{ display: "flex", gap: 1 }}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => setChartFullscreenOpen(true)}
+                        >
+                          Fullscreen chart
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            if (!selectedBacktest) return;
+                            setSettingsError(null);
+                            setSettingsState("idle");
+                            setSettingsTab("visual");
+                            setSettingsLabel(selectedBacktest.label ?? "");
+                            setSettingsNotes(selectedBacktest.notes ?? "");
+                            const vc = (selectedBacktest.visual_config ??
+                              {}) as VisualConfig;
+                            setVisualSettings({
+                              showTradeMarkers: vc.showTradeMarkers ?? true,
+                              showProjection: vc.showProjection ?? true,
+                              showVolume: vc.showVolume ?? true,
+                              showEquityCurve: vc.showEquityCurve ?? true
+                            });
+                            setSettingsOpen(true);
+                          }}
+                        >
+                          Settings
+                        </Button>
+                      </Box>
+                    </Box>
+                    <Grid container spacing={3}>
                 <Grid item xs={12} md={3}>
                   <Typography variant="subtitle2" gutterBottom>
                     Summary
@@ -1753,6 +1894,13 @@ export const BacktestsPage = () => {
                   </Box>
                 </Grid>
               </Grid>
+                    </Box>
+                ) : (
+                  <Typography variant="body2" color="textSecondary">
+                    Select a backtest to view details.
+                  </Typography>
+                )}
+              </Box>
             </CardContent>
           </Card>
         </Box>
