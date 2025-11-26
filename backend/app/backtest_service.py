@@ -9,6 +9,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from .backtest_engine import BacktestConfig, BacktraderEngine, EquityPoint, TradeRecord
+from .data_manager import DataManager
 from .models import (
     Backtest,
     BacktestEquityPoint,
@@ -48,8 +49,14 @@ _PANDAS_FREQ: Dict[str, str] = {
 class BacktestService:
     """Service layer for running backtests against stored price data."""
 
-    def __init__(self, *, engine: BacktraderEngine | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        engine: BacktraderEngine | None = None,
+        data_manager: DataManager | None = None,
+    ) -> None:
         self._engine = engine or BacktraderEngine()
+        self._data_manager = data_manager or DataManager()
 
     def _load_price_dataframe(
         self,
@@ -144,6 +151,19 @@ class BacktestService:
             resolved_params.update(param.params_json or {})
         if params:
             resolved_params.update(params)
+
+        # Ensure local coverage exists for the requested window before
+        # loading price data. When `price_source` is a recognised external
+        # provider (kite/yfinance), the DataManager will fetch missing bars
+        # into the prices DB; otherwise this is a no-op.
+        self._data_manager.ensure_symbol_coverage(
+            prices_db,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            source=price_source,
+        )
 
         df = self._load_price_dataframe(
             prices_db,
@@ -422,6 +442,18 @@ class BacktestService:
         candidate_trades: List[TradeRecord] = []
 
         for symbol in symbols:
+            # Ensure coverage for each symbol in the group before running the
+            # engine so both the portfolio simulator and chart-data can rely
+            # on local price data.
+            self._data_manager.ensure_symbol_coverage(
+                prices_db,
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                source=price_source,
+            )
+
             df = self._load_price_dataframe(
                 prices_db,
                 symbol=symbol,

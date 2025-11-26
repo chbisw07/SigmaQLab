@@ -490,6 +490,14 @@ export const BacktestsPage = () => {
         return;
       }
 
+      if (priceSource === "cache_only") {
+        setRunState("error");
+        setRunMessage(
+          "Cache-only mode cannot fetch fresh data. Switch to auto mode or use existing coverage."
+        );
+        return;
+      }
+
       // Trigger a fresh data fetch so the prices DB is up-to-date for this
       // backtest. The Data page will also reflect the updated coverage.
       try {
@@ -498,9 +506,10 @@ export const BacktestsPage = () => {
           timeframe,
           start_date: startDate,
           end_date: endDate,
-          source: priceSource === "kite" || priceSource === "yfinance"
-            ? (priceSource as "kite" | "yfinance")
-            : "kite",
+          source:
+            priceSource === "kite" || priceSource === "yfinance"
+              ? (priceSource as "kite" | "yfinance")
+              : "kite",
           csv_path: null,
           exchange
         };
@@ -1131,16 +1140,17 @@ export const BacktestsPage = () => {
                     select
                     fullWidth
                     margin="normal"
-                    label="Price source label"
-                    helperText="Optional label to track which data source was used"
+                    label="Data source mode"
+                    helperText="Choose whether backtests may fetch fresh data from the broker or only use locally cached prices."
                     value={priceSource}
                     onChange={(e) => setPriceSource(e.target.value)}
                   >
-                    <MenuItem value="prices_db">prices_db</MenuItem>
-                    <MenuItem value="kite">kite</MenuItem>
-                    <MenuItem value="yfinance">yfinance</MenuItem>
-                    <MenuItem value="synthetic">synthetic</MenuItem>
-                    <MenuItem value="csv">csv</MenuItem>
+                    <MenuItem value="kite">
+                      Auto (local cache + Kite)
+                    </MenuItem>
+                    <MenuItem value="cache_only">
+                      Cache only (local DB; no broker calls)
+                    </MenuItem>
                   </TextField>
 
                   <Box mt={2} sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>

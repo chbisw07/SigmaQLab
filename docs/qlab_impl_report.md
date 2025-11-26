@@ -1692,3 +1692,78 @@ Sprint workbook updates for S09/G03–G04:
   - `S09_G04_TF003` – Backtest Detail chart renders Zero Lag basis/bands using the new indicator series when present.
   - `S09_G04_TF004` – Backtest Detail chart renders trade markers, supports fullscreen mode, and honours per‑backtest chart theme preferences.
   All S09 tasks (G01–G04) are now `implemented` at the backend/API + UI level.
+
+---
+
+## Sprint S11 – Data Manager & OHLCV Cache (G01–G03)
+
+**Group:** G01 – Data Manager & OHLCV cache: PRD and design
+**Tasks:** S11_G01_TB001
+**Status (Codex):** implemented
+
+### S11_G01_TB001 – Data cache PRD and configuration
+
+- Captured the design for a persistent OHLCV cache and central Data Manager in `docs/qlab_data_cache_prd.md`.
+- Introduced new backend configuration settings in `backend/app/config.py`:
+  - `base_timeframe: str | None` – preferred intraday timeframe for caching (e.g. `"1h"`).
+  - `base_horizon_days: int` – default 1095 (~3 years) horizon for cached history.
+- Documented how backtests should always use the local prices DB, with external providers only used to fill gaps, and how the Data page’s role shifts toward cache inspection and pre‑warming.
+
+**Group:** G02 – Data Manager & OHLCV cache: backend implementation
+**Tasks:** S11_G02_TB001–TB003
+**Status (Codex):** implemented
+
+### S11_G02_TB001 – DataManager helper implementation
+
+- Added `backend/app/data_manager.py` with a `DataManager` service responsible for ensuring local OHLCV coverage:
+  - `ensure_symbol_coverage(prices_db, symbol, timeframe, start, end, source)`:
+    - Returns early when `start >= end`.
+    - Treats `source` case‑insensitively and only attempts external fetches for recognised providers (`kite`, `yfinance`); other labels (e.g. `synthetic`, `cache_only`) make it a no‑op.
+    - Chooses a fetch timeframe based on settings:
+      - If `Settings.base_timeframe` is configured and is a finer interval that divides evenly into the requested timeframe, it uses the base timeframe for caching.
+      - Otherwise it fetches the requested timeframe directly.
+    - Checks existing coverage in `price_bars` for `(symbol, fetch_timeframe)` via `min(timestamp), max(timestamp)` and skips provider calls when the stored window already fully contains `[start, end]`.
+    - When coverage is insufficient, delegates to `DataService.fetch_and_store_bars`, which handles provider‑specific chunking (e.g. Kite’s max days per interval) and persisting into `price_bars` / `price_fetches`.
+
+### S11_G02_TB002 – Wiring DataManager into BacktestService
+
+- Updated `BacktestService` in `backend/app/backtest_service.py` to depend on `DataManager`:
+  - The service constructor now accepts an optional `data_manager` but defaults to a concrete `DataManager()` instance.
+  - `run_single_backtest` calls `ensure_symbol_coverage` before loading price data via `_load_price_dataframe`, so single‑symbol backtests always run against locally cached bars.
+  - `run_group_backtest` loops over resolved group symbols and calls `ensure_symbol_coverage` per symbol before building per‑symbol DataFrames for the portfolio simulator.
+- As a result, backtests no longer call Kite or yfinance directly; all external data access flows through `DataService` via the Data Manager.
+
+### S11_G02_TB003 – Regression coverage for cache‑backed backtests
+
+- Extended backend tests so that backtests can run without prior manual Fetch Data calls:
+  - `backend/tests/test_backtests_api.py` now posts a backtest with `price_source="synthetic"` and verifies that:
+    - A backtest record is created with metrics, equity curve, and chart‑data available via `/api/backtests/{id}/chart-data`.
+    - Trades export continues to work via `/trades/export`.
+  - `backend/tests/test_data_fetch_api.py` and related tests exercise `/api/data/fetch` and `/api/data/summary` using synthetic providers.
+- Because `DataManager` treats non‑Kite/yfinance sources as cache‑only, these tests continue to run fully offline while still going through the same code paths as live backtests.
+
+**Group:** G03 – Data Manager & OHLCV cache: Data page integration
+**Tasks:** S11_G03_TF001–TF002
+**Status (Codex):** implemented
+
+### S11_G03_TF001 – Data page cache mode switch
+
+- Updated `frontend/src/pages/DataPage.tsx` to distinguish between casual preview and cache‑oriented fetches:
+  - Added a single checkbox, **“Save for backtesting (cache mode)”**, above the Fetch form.
+  - When cache mode is enabled:
+    - For daily (`1d`) selections, the effective fetch timeframe is adjusted to a cache‑friendly intraday base (currently `1h`) before calling `/api/data/fetch`.
+    - When the user selects a one‑day window, the effective fetch range is expanded to roughly the configured base horizon (e.g. ~3 years ending today), so repeated cache runs naturally maintain a rolling window for backtests.
+  - When cache mode is disabled, the Data page behaves like a preview tool and uses the user‑selected timeframe/dates without horizon expansion.
+
+### S11_G03_TF002 – Coverage Summary BT‑ready indicators
+
+- Extended the Coverage Summary table on the Data page to expose cache health:
+  - Added a `Days` column that shows the approximate span between `start` and `end` for each coverage row.
+  - Added a **“BT‑ready (3Y)”** column computed on the frontend using `created_at`, `start`, `end`, and a 3‑year horizon derived from today’s date:
+    - A row is marked “Yes” when its coverage fully contains the 3‑year window ending today.
+    - Otherwise the column is left blank, signalling that additional cache fills may be required for long‑horizon backtests.
+- These indicators are purely informational; backtests rely on `DataManager.ensure_symbol_coverage` to guarantee coverage at runtime, but the UI now gives a quick visual sense of which symbols are effectively “pre‑warmed” for BT.
+
+In addition, the Backtests UI now exposes a **Data source mode** select (Auto vs Cache only) whose value is passed as `price_source` to the backend; the Data Manager interprets this so that:
+- `Auto (local cache + Kite)` allows external fetches when coverage is missing.
+- `Cache only` forces backtests to rely solely on existing local OHLCV data, making it easy to test purely‑cache scenarios without hitting external APIs.

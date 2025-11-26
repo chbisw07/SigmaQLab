@@ -244,6 +244,31 @@ and manual diagnostics, not a prerequisite for running backtests.
 
 ## 5. Implementation Phases (for Sprint Planning)
 
+> **Status (after S11/G01–G03)**
+> The initial Data Manager and cache integration are now implemented:
+> - `Settings` expose `base_timeframe` and `base_horizon_days`, used by the Data Manager.
+> - `DataManager.ensure_symbol_coverage` is implemented and wired into both
+>   `BacktestService.run_single_backtest` and `run_group_backtest`; all backtests
+>   now rely on the local prices DB, with Kite/yfinance only used to fill gaps.
+> - For intraday backtests, `ensure_symbol_coverage` prefers a configured
+>   base timeframe (e.g. `1h`) when it divides evenly into the requested
+>   timeframe; otherwise it fetches the requested timeframe directly.
+> - The Data page has a single **“Save for backtesting (cache mode)”** switch
+>   that, when enabled, adjusts the fetch payload to cache-friendly defaults
+>   (e.g. expanding a one-day selection into a ~3‑year window and using the
+>   base timeframe).
+> - Coverage Summary now shows `Days` and **“BT‑ready (3Y)”** so you can see
+>   which rows fully cover the backtest horizon.
+> - The Backtests UI exposes a **Data source mode**:
+>   - `Auto (local cache + Kite)` → allows `DataManager` to call Kite when
+>     coverage is missing.
+>   - `Cache only` → backtests use only existing local data; `DataManager`
+>     becomes a no‑op for external providers.
+>
+> The remaining items in the phases below (gap-aware coverage tracking using
+> `price_fetches`, an explicit `ensure_group_coverage` helper, pruning jobs,
+> and richer config exposure) are still future work.
+
 ### Phase 1 – Design & scaffolding
 
 - Finalise base timeframe and horizon configuration.

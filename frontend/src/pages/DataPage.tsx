@@ -140,6 +140,7 @@ export const DataPage = () => {
     useState<PreviewRangePreset>("all");
   const [showLastPriceLine, setShowLastPriceLine] = useState(true);
   const [highlightLatestBar, setHighlightLatestBar] = useState(false);
+  const [cacheMode, setCacheMode] = useState<"preview" | "cache">("preview");
 
   useEffect(() => {
     const today = new Date();
@@ -488,14 +489,39 @@ export const DataPage = () => {
         return;
       }
 
+      // Derive effective timeframe and date range for this fetch. In cache
+      // mode we encourage a BT-friendly window by preferring a finer
+      // timeframe for caching and expanding a single-day selection into a
+      // multi-year horizon.
+      let effectiveTimeframe = timeframe;
+      let effectiveStartDate = startDate;
+      let effectiveEndDate = endDate;
+      if (cacheMode === "cache") {
+        if (timeframe === "1d") {
+          effectiveTimeframe = "1h";
+        }
+        if (startDate === endDate) {
+          const today = new Date();
+          const endIso = today.toISOString().slice(0, 10);
+          const threeYearsAgo = new Date(
+            today.getFullYear() - 3,
+            today.getMonth(),
+            today.getDate()
+          );
+          const startIso = threeYearsAgo.toISOString().slice(0, 10);
+          effectiveStartDate = startIso;
+          effectiveEndDate = endIso;
+        }
+      }
+
       const res = await fetch(`${API_BASE}/api/data/fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbol,
-          timeframe,
-          start_date: startDate,
-          end_date: endDate,
+          timeframe: effectiveTimeframe,
+          start_date: effectiveStartDate,
+          end_date: effectiveEndDate,
           source,
           exchange,
           target: fetchTarget,
@@ -673,6 +699,17 @@ export const DataPage = () => {
                 Fetch Data
               </Typography>
               <Box component="form" onSubmit={handleFetch} noValidate>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={cacheMode === "cache"}
+                      onChange={(e) =>
+                        setCacheMode(e.target.checked ? "cache" : "preview")
+                      }
+                    />
+                  }
+                  label="Save for backtesting (cache mode)"
+                />
                 <TextField
                   select
                   fullWidth
@@ -906,6 +943,8 @@ export const DataPage = () => {
                         <TableCell>Created</TableCell>
                         <TableCell>Start</TableCell>
                         <TableCell>End</TableCell>
+                        <TableCell align="right">Days</TableCell>
+                        <TableCell>BT-ready (3Y)</TableCell>
                         <TableCell align="right">Bars</TableCell>
                       </TableRow>
                     </TableHead>
@@ -913,6 +952,21 @@ export const DataPage = () => {
                       {summary.map((row) => {
                         const key = row.coverage_id;
                         const checked = selectedRows.has(key);
+                        const startDt = new Date(row.start_timestamp);
+                        const endDt = new Date(row.end_timestamp);
+                        const msPerDay = 24 * 60 * 60 * 1000;
+                        const days =
+                          Math.round(
+                            (endDt.getTime() - startDt.getTime()) / msPerDay
+                          ) || 0;
+                        const today = new Date();
+                        const horizonStart = new Date(
+                          today.getFullYear() - 3,
+                          today.getMonth(),
+                          today.getDate()
+                        );
+                        const isBtReady =
+                          startDt <= horizonStart && endDt >= today;
                         return (
                           <TableRow
                             key={key}
@@ -941,15 +995,17 @@ export const DataPage = () => {
                               })}
                             </TableCell>
                             <TableCell>
-                              {new Date(row.start_timestamp).toLocaleString("en-IN", {
+                              {startDt.toLocaleString("en-IN", {
                                 timeZone: "Asia/Kolkata"
                               })}
                             </TableCell>
                             <TableCell>
-                              {new Date(row.end_timestamp).toLocaleString("en-IN", {
+                              {endDt.toLocaleString("en-IN", {
                                 timeZone: "Asia/Kolkata"
                               })}
                             </TableCell>
+                            <TableCell align="right">{days}</TableCell>
+                            <TableCell>{isBtReady ? "Yes" : ""}</TableCell>
                             <TableCell align="right">{row.bar_count}</TableCell>
                           </TableRow>
                         );

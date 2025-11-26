@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     - SIGMAQLAB_KITE_API_KEY
     - SIGMAQLAB_KITE_API_SECRET
     - SIGMAQLAB_KITE_ACCESS_TOKEN
+    - SIGMAQLAB_BASE_TIMEFRAME
+    - SIGMAQLAB_BASE_HORIZON_DAYS
     """
 
     model_config = SettingsConfigDict(
@@ -35,6 +37,12 @@ class Settings(BaseSettings):
     kite_api_key: str | None = None
     kite_api_secret: str | None = None
     kite_access_token: str | None = None
+
+    # Optional base timeframe and horizon for the local OHLCV cache. When
+    # configured, components like the DataManager can prefer fetching this
+    # timeframe for caching and reuse it across multiple backtests.
+    base_timeframe: str | None = None
+    base_horizon_days: int = 1095
 
 
 @lru_cache()
