@@ -672,7 +672,7 @@ export const BacktestsPage = () => {
   const getStrategyLabel = (strategyId: number) => {
     const strategy = strategies.find((s) => s.id === strategyId);
     if (!strategy) return String(strategyId);
-    return `${strategy.code} – ${strategy.name}`;
+    return strategy.name;
   };
 
   const renderSymbols = (symbols: string[]) => {
@@ -994,7 +994,7 @@ export const BacktestsPage = () => {
                     <MenuItem value="">None</MenuItem>
                     {strategies.map((s) => (
                       <MenuItem key={s.id} value={s.id}>
-                        {s.code} – {s.name}
+                        {s.name}
                       </MenuItem>
                     ))}
                   </TextField>
