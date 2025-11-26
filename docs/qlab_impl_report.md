@@ -1517,7 +1517,7 @@ Sprint workbook updates for S08:
 
 ### S09_G01_TB001 – Pine script analysis
 
-- Analysed the TradingView script `ref_strategy_code/zero_lag_trend_strategy_mtf.pine` and documented:
+  - Analysed the TradingView script `ref_strategy_code/zero_lag_trend_strategy_mtf.pine` and documented:
   - All user inputs (length, band multiplier, MTF timeframes, colours, stop/target %, long‑only toggle).
   - Zero‑lag EMA and volatility band calculations:
     - De‑lagged price input and ATR‑based band width (`highest(atr(length), length*3) * mult`).

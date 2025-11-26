@@ -203,7 +203,9 @@ async def get_backtest_chart_data(
         )
     symbol = backtest.symbols_json[0]
 
-    # Load price bars for the backtest window.
+    # Load price bars for the backtest window. When no rows exist for the
+    # recorded timeframe we fall back to aggregating from a finer timeframe,
+    # mirroring BacktestService._load_price_dataframe.
     price_rows = (
         prices_db.query(PriceBar)
         .filter(
@@ -215,26 +217,62 @@ async def get_backtest_chart_data(
         .order_by(PriceBar.timestamp.asc())
         .all()
     )
-    if not price_rows:
-        raise HTTPException(
-            status_code=404,
-            detail="No price bars found for backtest window",
-        )
 
-    price_bars = [
-        BacktestChartPriceBar(
-            timestamp=row.timestamp,
-            open=row.open,
-            high=row.high,
-            low=row.low,
-            close=row.close,
-            volume=row.volume,
-        )
-        for row in price_rows
-    ]
+    price_bars: list[BacktestChartPriceBar] = []
+    closes: list[float] = []
+    timestamps: list[datetime] = []
 
-    closes = [row.close for row in price_rows]
-    timestamps = [row.timestamp for row in price_rows]
+    if price_rows:
+        for row in price_rows:
+            price_bars.append(
+                BacktestChartPriceBar(
+                    timestamp=row.timestamp,
+                    open=row.open,
+                    high=row.high,
+                    low=row.low,
+                    close=row.close,
+                    volume=row.volume,
+                )
+            )
+            closes.append(row.close)
+            timestamps.append(row.timestamp)
+    else:
+        # Attempt to aggregate from a lower timeframe (e.g. 5m -> 15m) using
+        # the same helper as the backtest engine. This allows chart-data to
+        # work even when only finer-grained data has been stored.
+        service = BacktestService()
+        df = service._aggregate_from_lower_timeframe(  # type: ignore[attr-defined]
+            prices_db=prices_db,
+            symbol=symbol,
+            target_timeframe=backtest.timeframe,
+            start=backtest.start_date,
+            end=backtest.end_date,
+        )
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail="No price bars found for backtest window",
+            )
+        for ts, row in df.iterrows():
+            # Pandas may return Timestamp objects; convert to plain datetime.
+            ts_dt = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+            o = float(row["open"])
+            h = float(row["high"])
+            low_val = float(row["low"])
+            c = float(row["close"])
+            v = float(row.get("volume", 0.0))
+            price_bars.append(
+                BacktestChartPriceBar(
+                    timestamp=ts_dt,
+                    open=o,
+                    high=h,
+                    low=low_val,
+                    close=c,
+                    volume=v,
+                )
+            )
+            closes.append(c)
+            timestamps.append(ts_dt)
 
     indicators: dict[str, List[dict[str, datetime | float]]] = {}
 

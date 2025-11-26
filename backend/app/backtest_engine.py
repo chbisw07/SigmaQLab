@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -10,6 +10,19 @@ try:
     import backtrader as bt
 except ImportError:  # pragma: no cover - optional dependency
     bt = None  # type: ignore[assignment]
+
+
+_TIMEFRAME_MINUTES: Dict[str, int] = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "10m": 10,
+    "15m": 15,
+    "30m": 30,
+    "60m": 60,
+    "1h": 60,
+    "1d": 24 * 60,
+}
 
 
 @dataclass
@@ -81,6 +94,9 @@ if bt is not None:
             broker_product_type="auto",  # intraday, delivery, auto
             allow_short=True,
             session_close_time="15:15",
+            # Duration (in minutes) of each bar so broker constraints can
+            # determine when the current bar extends beyond the session close.
+            bar_duration_minutes=0,
             # Risk sizing defaults (can be overridden via risk_config).
             max_position_size_pct=100.0,
             per_trade_risk_pct=None,
@@ -128,6 +144,7 @@ if bt is not None:
                     ).time()
             else:
                 self._session_close_time = close_cfg
+            self._bar_minutes: int = int(getattr(self.p, "bar_duration_minutes", 0))
 
         # Helper to enforce broker constraints such as intraday square-off and
         # disallowing overnight shorts in the cash segment.
@@ -136,7 +153,14 @@ if bt is not None:
                 return
 
             dt = self.data.datetime.datetime(0)
-            current_time = dt.time()
+            end_dt = dt
+            if self._bar_minutes:
+                end_dt = dt + timedelta(minutes=self._bar_minutes)
+            session_close_dt = (
+                datetime.combine(dt.date(), self._session_close_time)
+                if self._session_close_time is not None
+                else None
+            )
 
             is_short = self.position.size < 0
             is_intraday_product = self._product_type == "intraday"
@@ -144,9 +168,15 @@ if bt is not None:
             # Close positions that cannot be held overnight:
             # - Any position when product=intraday (MIS).
             # - Any short position in cash-equity, regardless of product.
-            if current_time >= self._session_close_time and (
-                is_intraday_product or is_short
-            ):
+            should_square = False
+            if session_close_dt is not None:
+                # When bar timestamps are aligned to the start of the bar,
+                # compare the bar's *end* with the session close so intraday
+                # contracts are squared off even on coarse timeframes.
+                if end_dt >= session_close_dt:
+                    should_square = is_intraday_product or is_short
+
+            if should_square:
                 if is_intraday_product and is_short:
                     reason = "intraday square-off (MIS short)"
                 elif is_intraday_product:
@@ -589,6 +619,7 @@ class BacktraderEngine:
             # For now we assume the standard India cash session and square-off
             # intraday products at 15:15 IST.
             "session_close_time": "15:15",
+            "bar_duration_minutes": _TIMEFRAME_MINUTES.get(config.timeframe.lower(), 0),
         }
 
         # Apply params to strategy, including broker constraints.

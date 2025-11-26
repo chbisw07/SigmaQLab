@@ -71,6 +71,8 @@ export const StocksPage = () => {
   const [stockFormActive, setStockFormActive] = useState(true);
   const [stockFormState, setStockFormState] = useState<FetchState>("idle");
   const [stockFormMessage, setStockFormMessage] = useState<string | null>(null);
+  const [bulkImportState, setBulkImportState] = useState<FetchState>("idle");
+  const [bulkImportMessage, setBulkImportMessage] = useState<string | null>(null);
 
   const [groups, setGroups] = useState<StockGroup[]>([]);
   const [groupsState, setGroupsState] = useState<FetchState>("idle");
@@ -90,6 +92,11 @@ export const StocksPage = () => {
   const [memberAddStockId, setMemberAddStockId] = useState<number | "">("");
   const [memberState, setMemberState] = useState<FetchState>("idle");
   const [memberMessage, setMemberMessage] = useState<string | null>(null);
+  const [groupBulkImportState, setGroupBulkImportState] =
+    useState<FetchState>("idle");
+  const [groupBulkImportMessage, setGroupBulkImportMessage] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     const loadUniverse = async () => {
@@ -149,6 +156,8 @@ export const StocksPage = () => {
     setStockFormActive(true);
     setStockFormState("idle");
     setStockFormMessage(null);
+    setBulkImportState("idle");
+    setBulkImportMessage(null);
   };
 
   const handleSelectStock = (stock: Stock) => {
@@ -277,6 +286,94 @@ export const StocksPage = () => {
     showInactive ? true : s.is_active
   );
 
+  const handleBulkImportCsv = async (file: File) => {
+    setBulkImportState("loading");
+    setBulkImportMessage(null);
+
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length === 0) {
+        setBulkImportState("error");
+        setBulkImportMessage("CSV file is empty.");
+        return;
+      }
+
+      const header = lines[0].split(",").map((h) => h.trim());
+      const nseIndex = header.findIndex(
+        (h) => h.toLowerCase() === "nse code"
+      );
+      if (nseIndex === -1) {
+        setBulkImportState("error");
+        setBulkImportMessage(
+          'CSV must contain a header column named "NSE Code" (case-insensitive).'
+        );
+        return;
+      }
+
+      const symbols: string[] = [];
+      for (let i = 1; i < lines.length; i += 1) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const cols = line.split(",");
+        if (nseIndex >= cols.length) continue;
+        const raw = cols[nseIndex].trim();
+        if (!raw) continue;
+        symbols.push(raw.toUpperCase());
+      }
+
+      const uniqueSymbols = Array.from(new Set(symbols));
+      if (uniqueSymbols.length === 0) {
+        setBulkImportState("error");
+        setBulkImportMessage("No NSE codes found in the CSV.");
+        return;
+      }
+
+      let createdCount = 0;
+      let existingCount = 0;
+      let errorCount = 0;
+
+      // Import each symbol as an NSE stock; ignore duplicates gracefully.
+      // eslint-disable-next-line no-restricted-syntax
+      for (const sym of uniqueSymbols) {
+        const payload = {
+          symbol: sym,
+          exchange: "NSE",
+          segment: null,
+          name: null,
+          sector: null,
+          tags: null,
+          is_active: true
+        };
+        // eslint-disable-next-line no-await-in-loop
+        const res = await fetch(`${API_BASE}/api/stocks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const created: Stock = await res.json();
+          createdCount += 1;
+          setStocks((prev) => [...prev, created]);
+        } else if (res.status === 409) {
+          existingCount += 1;
+        } else {
+          errorCount += 1;
+        }
+      }
+
+      setBulkImportState("success");
+      setBulkImportMessage(
+        `Bulk import complete: ${createdCount} added, ${existingCount} already existed, ${errorCount} failed.`
+      );
+    } catch (error) {
+      setBulkImportState("error");
+      setBulkImportMessage(
+        error instanceof Error ? error.message : "Unexpected error during import."
+      );
+    }
+  };
+
   const resetGroupForm = () => {
     setSelectedGroupId(null);
     setSelectedGroup(null);
@@ -289,6 +386,8 @@ export const StocksPage = () => {
     setMemberAddStockId("");
     setMemberState("idle");
     setMemberMessage(null);
+    setGroupBulkImportState("idle");
+    setGroupBulkImportMessage(null);
   };
 
   const loadGroupDetail = async (groupId: number) => {
@@ -426,6 +525,161 @@ export const StocksPage = () => {
     if (!selectedGroup) return true;
     return !selectedGroup.members.some((m) => m.id === s.id);
   });
+
+  const handleBulkAddMembersFromCsv = async (file: File) => {
+    if (!selectedGroupId || !selectedGroup) {
+      setGroupBulkImportState("error");
+      setGroupBulkImportMessage(
+        "Select a group before importing members from CSV."
+      );
+      return;
+    }
+
+    setGroupBulkImportState("loading");
+    setGroupBulkImportMessage(null);
+
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length === 0) {
+        setGroupBulkImportState("error");
+        setGroupBulkImportMessage("CSV file is empty.");
+        return;
+      }
+
+      const header = lines[0].split(",").map((h) => h.trim());
+      const nseIndex = header.findIndex(
+        (h) => h.toLowerCase() === "nse code"
+      );
+      if (nseIndex === -1) {
+        setGroupBulkImportState("error");
+        setGroupBulkImportMessage(
+          'CSV must contain a header column named "NSE Code" (case-insensitive).'
+        );
+        return;
+      }
+
+      const symbols: string[] = [];
+      for (let i = 1; i < lines.length; i += 1) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const cols = line.split(",");
+        if (nseIndex >= cols.length) continue;
+        const raw = cols[nseIndex].trim();
+        if (!raw) continue;
+        symbols.push(raw.toUpperCase());
+      }
+
+      const uniqueSymbols = Array.from(new Set(symbols));
+      if (uniqueSymbols.length === 0) {
+        setGroupBulkImportState("error");
+        setGroupBulkImportMessage("No NSE codes found in the CSV.");
+        return;
+      }
+
+      const existingStocksByKey = new Map<string, Stock>();
+      stocks.forEach((s) => {
+        const key = `${s.symbol.toUpperCase()}|${s.exchange.toUpperCase()}`;
+        existingStocksByKey.set(key, s);
+      });
+
+      const existingMembers = new Set<number>(
+        selectedGroup.members.map((m) => m.id)
+      );
+
+      const stockIdsToAdd: number[] = [];
+      let createdCount = 0;
+      let reusedCount = 0;
+
+      // Ensure each symbol exists as an NSE stock; then collect ids to add.
+      // eslint-disable-next-line no-restricted-syntax
+      for (const sym of uniqueSymbols) {
+        const key = `${sym}|NSE`;
+        let stock = existingStocksByKey.get(key);
+        if (!stock) {
+          const payload = {
+            symbol: sym,
+            exchange: "NSE",
+            segment: null,
+            name: null,
+            sector: null,
+            tags: null,
+            is_active: true
+          };
+          // eslint-disable-next-line no-await-in-loop
+          const res = await fetch(`${API_BASE}/api/stocks`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+            const created: Stock = await res.json();
+            createdCount += 1;
+            stock = created;
+            existingStocksByKey.set(key, created);
+            setStocks((prev) => [...prev, created]);
+          } else if (res.status === 409) {
+            // Fetch the stock from the latest universe list if duplicate.
+            stock = stocks.find(
+              (s) =>
+                s.symbol.toUpperCase() === sym && s.exchange.toUpperCase() === "NSE"
+            );
+            reusedCount += 1;
+          }
+        } else {
+          reusedCount += 1;
+        }
+
+        if (stock && !existingMembers.has(stock.id)) {
+          stockIdsToAdd.push(stock.id);
+        }
+      }
+
+      if (stockIdsToAdd.length === 0) {
+        setGroupBulkImportState("success");
+        setGroupBulkImportMessage(
+          `No new members to add. ${createdCount} ensured in universe, ${reusedCount} already existed.`
+        );
+        return;
+      }
+
+      const res = await fetch(
+        `${API_BASE}/api/stock-groups/${selectedGroupId}/members`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stock_ids: stockIdsToAdd })
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setGroupBulkImportState("error");
+        setGroupBulkImportMessage(
+          (err as { detail?: string }).detail ??
+            "Failed to add members from CSV."
+        );
+        return;
+      }
+
+      const detail: StockGroupDetail = await res.json();
+      setSelectedGroup(detail);
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === detail.id ? { ...g, stock_count: detail.stock_count } : g
+        )
+      );
+
+      setGroupBulkImportState("success");
+      setGroupBulkImportMessage(
+        `Group import complete: ${stockIdsToAdd.length} member(s) added, ${createdCount} ensured in universe, ${reusedCount} reused.`
+      );
+    } catch (error) {
+      setGroupBulkImportState("error");
+      setGroupBulkImportMessage(
+        error instanceof Error ? error.message : "Unexpected error during import."
+      );
+    }
+  };
 
   const handleAddMember = async () => {
     if (!selectedGroupId || !memberAddStockId) return;
@@ -603,6 +857,41 @@ export const StocksPage = () => {
                       mt={1}
                     >
                       {stockFormMessage}
+                    </Typography>
+                  )}
+                </Box>
+                <Box mt={3}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Bulk import NSE stocks from CSV
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    CSV must have a column named <code>NSE Code</code> (any case).
+                    Symbols from that column will be added as NSE stocks.
+                  </Typography>
+                  <Box mt={1}>
+                    <Button variant="outlined" component="label" size="small">
+                      Upload CSV
+                      <input
+                        type="file"
+                        accept=".csv,text/csv"
+                        hidden
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            void handleBulkImportCsv(file);
+                            e.target.value = "";
+                          }
+                        }}
+                      />
+                    </Button>
+                  </Box>
+                  {bulkImportMessage && (
+                    <Typography
+                      variant="body2"
+                      color={bulkImportState === "error" ? "error" : "textSecondary"}
+                      mt={1}
+                    >
+                      {bulkImportMessage}
                     </Typography>
                   )}
                 </Box>
@@ -881,17 +1170,48 @@ export const StocksPage = () => {
                         >
                           Add
                         </Button>
-                        {memberMessage && (
-                          <Typography
-                            variant="body2"
-                            color={
-                              memberState === "error" ? "error" : "textSecondary"
-                            }
-                          >
-                            {memberMessage}
-                          </Typography>
-                        )}
+                        <Button
+                          variant="outlined"
+                          component="label"
+                          size="small"
+                        >
+                          Import from CSV
+                          <input
+                            type="file"
+                            accept=".csv,text/csv"
+                            hidden
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                void handleBulkAddMembersFromCsv(file);
+                                e.target.value = "";
+                              }
+                            }}
+                          />
+                        </Button>
                       </Box>
+                      {memberMessage && (
+                        <Typography
+                          variant="body2"
+                          color={memberState === "error" ? "error" : "textSecondary"}
+                          gutterBottom
+                        >
+                          {memberMessage}
+                        </Typography>
+                      )}
+                      {groupBulkImportMessage && (
+                        <Typography
+                          variant="body2"
+                          color={
+                            groupBulkImportState === "error"
+                              ? "error"
+                              : "textSecondary"
+                          }
+                          gutterBottom
+                        >
+                          {groupBulkImportMessage}
+                        </Typography>
+                      )}
                       {selectedGroup.members.length === 0 ? (
                         <Typography variant="body2" color="textSecondary">
                           This group has no members yet.
