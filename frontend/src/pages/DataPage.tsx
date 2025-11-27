@@ -686,7 +686,7 @@ export const DataPage = () => {
         Data Management
       </Typography>
       <Grid container spacing={3}>
-        <Grid item xs={12} md={5}>
+        <Grid item xs={12} md={3}>
           <Card
             sx={{
               height: 800,
@@ -874,7 +874,7 @@ export const DataPage = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} md={7}>
+        <Grid item xs={12} md={9}>
           <Card
             sx={{
               height: 800,

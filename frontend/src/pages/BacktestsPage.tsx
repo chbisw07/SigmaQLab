@@ -193,6 +193,10 @@ export const BacktestsPage = () => {
   const [symbol, setSymbol] = useState("");
   const [exchange, setExchange] = useState("NSE");
   const [timeframe, setTimeframe] = useState("1h");
+  const [dateMode, setDateMode] = useState<"relative" | "custom">("relative");
+  const [relativeDuration, setRelativeDuration] = useState<
+    "1d" | "5d" | "1m" | "3m" | "6m" | "1y" | "2y" | "3y"
+  >("1y");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [startTime, setStartTime] = useState("09:15");
@@ -289,6 +293,8 @@ export const BacktestsPage = () => {
     setSymbol("");
     setExchange("NSE");
     setTimeframe("1h");
+    setDateMode("relative");
+    setRelativeDuration("1y");
     const today = new Date();
     const endIso = today.toISOString().slice(0, 10);
     const start = new Date(today);
@@ -457,17 +463,57 @@ export const BacktestsPage = () => {
         setRunMessage("Select a stock group when running a group backtest.");
         return;
       }
-      if (!timeframe || !startDate || !endDate) {
+      if (!timeframe) {
         setRunState("error");
-        setRunMessage(
-          "Provide interval and date range for group backtests."
-        );
+        setRunMessage("Provide an interval for group backtests.");
         return;
       }
       effectiveSymbol = "GROUP";
       effectiveTimeframe = timeframe;
-      effectiveStartDate = startDate;
-      effectiveEndDate = endDate;
+      if (dateMode === "relative") {
+        const end = new Date();
+        const start = new Date(end);
+        switch (relativeDuration) {
+          case "1d":
+            start.setDate(end.getDate() - 1);
+            break;
+          case "5d":
+            start.setDate(end.getDate() - 5);
+            break;
+          case "1m":
+            start.setMonth(end.getMonth() - 1);
+            break;
+          case "3m":
+            start.setMonth(end.getMonth() - 3);
+            break;
+          case "6m":
+            start.setMonth(end.getMonth() - 6);
+            break;
+          case "1y":
+            start.setFullYear(end.getFullYear() - 1);
+            break;
+          case "2y":
+            start.setFullYear(end.getFullYear() - 2);
+            break;
+          case "3y":
+            start.setFullYear(end.getFullYear() - 3);
+            break;
+          default:
+            break;
+        }
+        effectiveStartDate = start.toISOString().slice(0, 10);
+        effectiveEndDate = end.toISOString().slice(0, 10);
+      } else {
+        if (!startDate || !endDate) {
+          setRunState("error");
+          setRunMessage(
+            "Provide start and end dates when using custom mode."
+          );
+          return;
+        }
+        effectiveStartDate = startDate;
+        effectiveEndDate = endDate;
+      }
       // Use explicit times; group runs still respect intraday session where applicable.
       effectiveStartTime = startTime || "09:15";
       effectiveEndTime = endTime || "15:30";
@@ -492,10 +538,10 @@ export const BacktestsPage = () => {
       effectivePriceSource = cov.source ?? priceSource ?? null;
     } else {
       // When fetching fresh data, ensure required fields are present.
-      if (!symbol.trim() || !timeframe || !startDate || !endDate) {
+      if (!symbol.trim() || !timeframe) {
         setRunState("error");
         setRunMessage(
-          "Provide symbol, interval, and date range when fetching fresh data."
+          "Provide symbol and interval when fetching fresh data."
         );
         return;
       }
@@ -508,14 +554,59 @@ export const BacktestsPage = () => {
         return;
       }
 
+      if (dateMode === "relative") {
+        const end = new Date();
+        const start = new Date(end);
+        switch (relativeDuration) {
+          case "1d":
+            start.setDate(end.getDate() - 1);
+            break;
+          case "5d":
+            start.setDate(end.getDate() - 5);
+            break;
+          case "1m":
+            start.setMonth(end.getMonth() - 1);
+            break;
+          case "3m":
+            start.setMonth(end.getMonth() - 3);
+            break;
+          case "6m":
+            start.setMonth(end.getMonth() - 6);
+            break;
+          case "1y":
+            start.setFullYear(end.getFullYear() - 1);
+            break;
+          case "2y":
+            start.setFullYear(end.getFullYear() - 2);
+            break;
+          case "3y":
+            start.setFullYear(end.getFullYear() - 3);
+            break;
+          default:
+            break;
+        }
+        effectiveStartDate = start.toISOString().slice(0, 10);
+        effectiveEndDate = end.toISOString().slice(0, 10);
+      } else {
+        if (!startDate || !endDate) {
+          setRunState("error");
+          setRunMessage(
+            "Provide start and end dates when using custom mode."
+          );
+          return;
+        }
+        effectiveStartDate = startDate;
+        effectiveEndDate = endDate;
+      }
+
       // Trigger a fresh data fetch so the prices DB is up-to-date for this
       // backtest. The Data page will also reflect the updated coverage.
       try {
         const fetchPayload = {
           symbol: symbol.trim().toUpperCase(),
           timeframe,
-          start_date: startDate,
-          end_date: endDate,
+          start_date: effectiveStartDate,
+          end_date: effectiveEndDate,
           source:
             priceSource === "kite" || priceSource === "yfinance"
               ? (priceSource as "kite" | "yfinance")
@@ -1069,48 +1160,116 @@ export const BacktestsPage = () => {
                         <MenuItem value="1d">1 day</MenuItem>
                       </TextField>
 
-                      <Grid container spacing={2}>
-                        <Grid item xs={6}>
+                      <TextField
+                        select
+                        fullWidth
+                        margin="normal"
+                        label="Date mode"
+                        helperText="Choose a relative duration or specify custom start/end dates."
+                        value={dateMode}
+                        onChange={(e) =>
+                          setDateMode(
+                            e.target.value === "custom" ? "custom" : "relative"
+                          )
+                        }
+                      >
+                        <MenuItem value="relative">Duration (relative)</MenuItem>
+                        <MenuItem value="custom">Custom start/end</MenuItem>
+                      </TextField>
+
+                      {dateMode === "relative" ? (
+                        <>
                           <TextField
+                            select
                             fullWidth
                             margin="normal"
-                            label="Start date"
-                            type="date"
-                            InputLabelProps={{ shrink: true }}
-                            value={startDate}
-                            onChange={(e) => setStartDate(e.target.value)}
-                          />
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="Start time"
-                            type="time"
-                            InputLabelProps={{ shrink: true }}
-                            value={startTime}
-                            onChange={(e) => setStartTime(e.target.value)}
-                          />
+                            label="Duration"
+                            helperText="Run backtests for the last N days/months/years."
+                            value={relativeDuration}
+                            onChange={(e) =>
+                              setRelativeDuration(
+                                e.target.value as typeof relativeDuration
+                              )
+                            }
+                          >
+                            <MenuItem value="1d">Last 1 day</MenuItem>
+                            <MenuItem value="5d">Last 5 days</MenuItem>
+                            <MenuItem value="1m">Last 1 month</MenuItem>
+                            <MenuItem value="3m">Last 3 months</MenuItem>
+                            <MenuItem value="6m">Last 6 months</MenuItem>
+                            <MenuItem value="1y">Last 1 year</MenuItem>
+                            <MenuItem value="2y">Last 2 years</MenuItem>
+                            <MenuItem value="3y">Last 3 years</MenuItem>
+                          </TextField>
+                          <Grid container spacing={2}>
+                            <Grid item xs={6}>
+                              <TextField
+                                fullWidth
+                                margin="normal"
+                                label="Start time"
+                                type="time"
+                                InputLabelProps={{ shrink: true }}
+                                value={startTime}
+                                onChange={(e) => setStartTime(e.target.value)}
+                              />
+                            </Grid>
+                            <Grid item xs={6}>
+                              <TextField
+                                fullWidth
+                                margin="normal"
+                                label="End time"
+                                type="time"
+                                InputLabelProps={{ shrink: true }}
+                                value={endTime}
+                                onChange={(e) => setEndTime(e.target.value)}
+                              />
+                            </Grid>
+                          </Grid>
+                        </>
+                      ) : (
+                        <Grid container spacing={2}>
+                          <Grid item xs={6}>
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="Start date"
+                              type="date"
+                              InputLabelProps={{ shrink: true }}
+                              value={startDate}
+                              onChange={(e) => setStartDate(e.target.value)}
+                            />
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="Start time"
+                              type="time"
+                              InputLabelProps={{ shrink: true }}
+                              value={startTime}
+                              onChange={(e) => setStartTime(e.target.value)}
+                            />
+                          </Grid>
+                          <Grid item xs={6}>
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="End date"
+                              type="date"
+                              InputLabelProps={{ shrink: true }}
+                              value={endDate}
+                              onChange={(e) => setEndDate(e.target.value)}
+                            />
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="End time"
+                              type="time"
+                              InputLabelProps={{ shrink: true }}
+                              value={endTime}
+                              onChange={(e) => setEndTime(e.target.value)}
+                            />
+                          </Grid>
                         </Grid>
-                        <Grid item xs={6}>
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="End date"
-                            type="date"
-                            InputLabelProps={{ shrink: true }}
-                            value={endDate}
-                            onChange={(e) => setEndDate(e.target.value)}
-                          />
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="End time"
-                            type="time"
-                            InputLabelProps={{ shrink: true }}
-                            value={endTime}
-                            onChange={(e) => setEndTime(e.target.value)}
-                          />
-                        </Grid>
-                      </Grid>
+                      )}
                     </>
                   )}
 
@@ -1145,64 +1304,131 @@ export const BacktestsPage = () => {
                           </MenuItem>
                         ))}
                       </TextField>
-                      <Grid container spacing={2}>
-                        <Grid item xs={6}>
+                      <TextField
+                        select
+                        fullWidth
+                        margin="normal"
+                        label="Interval"
+                        value={timeframe}
+                        onChange={(e) => setTimeframe(e.target.value)}
+                      >
+                        <MenuItem value="1m">1 minute</MenuItem>
+                        <MenuItem value="3m">3 minutes</MenuItem>
+                        <MenuItem value="5m">5 minutes</MenuItem>
+                        <MenuItem value="15m">15 minutes</MenuItem>
+                        <MenuItem value="30m">30 minutes</MenuItem>
+                        <MenuItem value="1h">1 hour</MenuItem>
+                        <MenuItem value="1d">1 day</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        fullWidth
+                        margin="normal"
+                        label="Date mode"
+                        helperText="Choose a relative duration or specify custom start/end dates."
+                        value={dateMode}
+                        onChange={(e) =>
+                          setDateMode(
+                            e.target.value === "custom" ? "custom" : "relative"
+                          )
+                        }
+                      >
+                        <MenuItem value="relative">Duration (relative)</MenuItem>
+                        <MenuItem value="custom">Custom start/end</MenuItem>
+                      </TextField>
+                      {dateMode === "relative" ? (
+                        <>
                           <TextField
                             select
                             fullWidth
                             margin="normal"
-                            label="Interval"
-                            value={timeframe}
-                            onChange={(e) => setTimeframe(e.target.value)}
+                            label="Duration"
+                            helperText="Run backtests for the last N days/months/years."
+                            value={relativeDuration}
+                            onChange={(e) =>
+                              setRelativeDuration(
+                                e.target.value as typeof relativeDuration
+                              )
+                            }
                           >
-                            <MenuItem value="1m">1 minute</MenuItem>
-                            <MenuItem value="3m">3 minutes</MenuItem>
-                            <MenuItem value="5m">5 minutes</MenuItem>
-                            <MenuItem value="15m">15 minutes</MenuItem>
-                            <MenuItem value="30m">30 minutes</MenuItem>
-                            <MenuItem value="1h">1 hour</MenuItem>
-                            <MenuItem value="1d">1 day</MenuItem>
+                            <MenuItem value="1d">Last 1 day</MenuItem>
+                            <MenuItem value="5d">Last 5 days</MenuItem>
+                            <MenuItem value="1m">Last 1 month</MenuItem>
+                            <MenuItem value="3m">Last 3 months</MenuItem>
+                            <MenuItem value="6m">Last 6 months</MenuItem>
+                            <MenuItem value="1y">Last 1 year</MenuItem>
+                            <MenuItem value="2y">Last 2 years</MenuItem>
+                            <MenuItem value="3y">Last 3 years</MenuItem>
                           </TextField>
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="Start date"
-                            type="date"
-                            InputLabelProps={{ shrink: true }}
-                            value={startDate}
-                            onChange={(e) => setStartDate(e.target.value)}
-                          />
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="Start time"
-                            type="time"
-                            InputLabelProps={{ shrink: true }}
-                            value={startTime}
-                            onChange={(e) => setStartTime(e.target.value)}
-                          />
+                          <Grid container spacing={2}>
+                            <Grid item xs={6}>
+                              <TextField
+                                fullWidth
+                                margin="normal"
+                                label="Start time"
+                                type="time"
+                                InputLabelProps={{ shrink: true }}
+                                value={startTime}
+                                onChange={(e) => setStartTime(e.target.value)}
+                              />
+                            </Grid>
+                            <Grid item xs={6}>
+                              <TextField
+                                fullWidth
+                                margin="normal"
+                                label="End time"
+                                type="time"
+                                InputLabelProps={{ shrink: true }}
+                                value={endTime}
+                                onChange={(e) => setEndTime(e.target.value)}
+                              />
+                            </Grid>
+                          </Grid>
+                        </>
+                      ) : (
+                        <Grid container spacing={2}>
+                          <Grid item xs={6}>
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="Start date"
+                              type="date"
+                              InputLabelProps={{ shrink: true }}
+                              value={startDate}
+                              onChange={(e) => setStartDate(e.target.value)}
+                            />
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="Start time"
+                              type="time"
+                              InputLabelProps={{ shrink: true }}
+                              value={startTime}
+                              onChange={(e) => setStartTime(e.target.value)}
+                            />
+                          </Grid>
+                          <Grid item xs={6}>
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="End date"
+                              type="date"
+                              InputLabelProps={{ shrink: true }}
+                              value={endDate}
+                              onChange={(e) => setEndDate(e.target.value)}
+                            />
+                            <TextField
+                              fullWidth
+                              margin="normal"
+                              label="End time"
+                              type="time"
+                              InputLabelProps={{ shrink: true }}
+                              value={endTime}
+                              onChange={(e) => setEndTime(e.target.value)}
+                            />
+                          </Grid>
                         </Grid>
-                        <Grid item xs={6}>
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="End date"
-                            type="date"
-                            InputLabelProps={{ shrink: true }}
-                            value={endDate}
-                            onChange={(e) => setEndDate(e.target.value)}
-                          />
-                          <TextField
-                            fullWidth
-                            margin="normal"
-                            label="End time"
-                            type="time"
-                            InputLabelProps={{ shrink: true }}
-                            value={endTime}
-                            onChange={(e) => setEndTime(e.target.value)}
-                          />
-                        </Grid>
-                      </Grid>
+                      )}
                     </>
                   )}
 
