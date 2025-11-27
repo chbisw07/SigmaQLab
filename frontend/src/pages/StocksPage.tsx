@@ -761,9 +761,6 @@ export const StocksPage = () => {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>
-        Stocks
-      </Typography>
       <Tabs
         value={tab}
         onChange={(_, value) => setTab(value as TabId)}

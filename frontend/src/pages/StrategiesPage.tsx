@@ -697,9 +697,6 @@ export const StrategiesPage = () => {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>
-        Strategy Library
-      </Typography>
       <Grid container spacing={3}>
         <Grid item xs={12} md={4}>
             <Card>
