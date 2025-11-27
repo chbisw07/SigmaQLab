@@ -321,11 +321,6 @@ export const BacktestsPage = () => {
   };
 
   useEffect(() => {
-    resetRunFormDefaults();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     const loadInitialData = async () => {
       try {
         const [strategiesRes, backtestsRes, coverageRes, groupsRes] = await Promise.all([
@@ -900,14 +895,11 @@ export const BacktestsPage = () => {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>
-        Backtests
-      </Typography>
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={5}>
+      <Grid container spacing={3} alignItems="stretch">
+        <Grid item xs={12} md={3}>
           <Card
             sx={{
-              height: 460,
+              height: "calc(100vh - 160px)",
               display: "flex",
               flexDirection: "column"
             }}
@@ -1264,22 +1256,31 @@ export const BacktestsPage = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={7}>
-          <Card
+        <Grid item xs={12} md={9}>
+          <Box
             sx={{
-              height: 460,
+              height: "calc(100vh - 160px)",
               display: "flex",
-              flexDirection: "column"
+              flexDirection: "column",
+              gap: 3
             }}
           >
-            <CardContent
+            <Card
               sx={{
                 flex: 1,
                 display: "flex",
                 flexDirection: "column",
-                overflow: "hidden"
+                minHeight: 260
               }}
             >
+              <CardContent
+                sx={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden"
+                }}
+              >
               <Box
                 sx={{
                   display: "flex",
@@ -1451,48 +1452,60 @@ export const BacktestsPage = () => {
                   </Table>
                 </Box>
               )}
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
+              </CardContent>
+            </Card>
 
-      {detailTabs.length > 0 && (
-        <Box mt={3}>
-          <Card>
-            <CardContent>
-              <Tabs
-                value={activeDetailTabId ?? false}
-                onChange={handleDetailTabChange}
-                variant="scrollable"
-                scrollButtons="auto"
+            {detailTabs.length > 0 && (
+              <Card
+                sx={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  minHeight: 260
+                }}
               >
-                {detailTabs.map((tab) => (
-                  <Tab
-                    key={tab.id}
-                    value={tab.id}
-                    label={
-                      <Box
-                        sx={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 0.5
-                        }}
-                      >
-                        <span>{tab.label}</span>
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleCloseDetailTab(e, tab.id)}
-                        >
-                          <CloseIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
-                    }
-                  />
-                ))}
-              </Tabs>
-              <Box mt={2}>
-                {selectedBacktest && activeDetailTabId === selectedBacktest.id ? (
-                  <Box>
+                <CardContent
+                  sx={{
+                    flex: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    overflow: "auto"
+                  }}
+                >
+                  <Tabs
+                    value={activeDetailTabId ?? false}
+                    onChange={handleDetailTabChange}
+                    variant="scrollable"
+                    scrollButtons="auto"
+                  >
+                    {detailTabs.map((tab) => (
+                      <Tab
+                        key={tab.id}
+                        value={tab.id}
+                        label={
+                          <Box
+                            sx={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 0.5
+                            }}
+                          >
+                            <span>{tab.label}</span>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => handleCloseDetailTab(e, tab.id)}
+                            >
+                              <CloseIcon fontSize="small" />
+                            </IconButton>
+                          </Box>
+                        }
+                      />
+                    ))}
+                  </Tabs>
+                  <Box mt={2}>
+                    {selectedBacktest &&
+                    activeDetailTabId === selectedBacktest.id ? (
+                      <Box>
                     <Box
                       sx={{
                         display: "flex",
@@ -1538,7 +1551,7 @@ export const BacktestsPage = () => {
                       </Box>
                     </Box>
                     <Grid container spacing={3}>
-                <Grid item xs={12} md={3}>
+                      <Grid item xs={12} md={3}>
                   <Typography variant="subtitle2" gutterBottom>
                     Summary
                   </Typography>
@@ -1716,7 +1729,7 @@ export const BacktestsPage = () => {
                   )}
                 </Grid>
 
-                <Grid item xs={12} md={9}>
+                      <Grid item xs={12} md={9}>
                   <Typography variant="subtitle2" gutterBottom>
                     Price & Trades
                   </Typography>
@@ -1745,8 +1758,8 @@ export const BacktestsPage = () => {
                   )}
                 </Grid>
 
-                <Grid item xs={12}>
-                  <Box mt={3}>
+                      <Grid item xs={12}>
+                        <Box mt={3}>
                     <Typography variant="subtitle2" gutterBottom>
                       Trades
                     </Typography>
@@ -1891,10 +1904,10 @@ export const BacktestsPage = () => {
                         </TableBody>
                       </Table>
                     ) : null}
+                        </Box>
+                      </Grid>
+                    </Grid>
                   </Box>
-                </Grid>
-              </Grid>
-                    </Box>
                 ) : (
                   <Typography variant="body2" color="textSecondary">
                     Select a backtest to view details.
@@ -1903,8 +1916,10 @@ export const BacktestsPage = () => {
               </Box>
             </CardContent>
           </Card>
-        </Box>
-      )}
+          )}
+          </Box>
+        </Grid>
+      </Grid>
 
       {selectedBacktest && chartFullscreenOpen && (
         <Dialog
