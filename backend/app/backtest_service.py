@@ -501,8 +501,13 @@ class BacktestService:
                 EquityPoint(timestamp=ts, equity=initial_capital) for ts in all_times
             ]
             trades: List[TradeRecord] = []
+            routing_debug: Dict[str, Any] = {
+                "per_bar": [],
+                "total_candidates": 0.0,
+                "total_accepted": 0.0,
+            }
         else:
-            equity_curve, trades = self._run_portfolio_simulator(
+            equity_curve, trades, routing_debug = self._run_portfolio_simulator(
                 initial_capital=initial_capital,
                 timeframe=timeframe,
                 price_data_by_symbol=price_data_by_symbol,
@@ -566,6 +571,9 @@ class BacktestService:
         metrics["pnl_realised"] = realised_pnl
         metrics["pnl_unrealised"] = unrealised_pnl
         metrics["pnl_what_if"] = unrealised_pnl
+
+        # Capital-aware routing debug info (per-bar candidates vs accepted).
+        metrics["routing_debug"] = routing_debug
 
         # Per-symbol summary metrics (basic for now): trade_count and net PnL.
         per_symbol: Dict[str, Dict[str, float]] = {}
@@ -704,7 +712,7 @@ class BacktestService:
         price_data_by_symbol: Dict[str, pd.DataFrame],
         candidate_trades: List[TradeRecord],
         risk_config: Dict[str, Any],
-    ) -> Tuple[List[EquityPoint], List[TradeRecord]]:
+    ) -> Tuple[List[EquityPoint], List[TradeRecord], Dict[str, Any]]:
         """Replay candidate trades under shared-capital risk rules.
 
         The simulator:
@@ -716,7 +724,15 @@ class BacktestService:
         """
 
         if not candidate_trades:
-            return [], []
+            return (
+                [],
+                [],
+                {
+                    "per_bar": [],
+                    "total_candidates": 0,
+                    "total_accepted": 0,
+                },
+            )
 
         # Helper to look up a close price from a symbol's DataFrame. For entry
         # we prefer the first bar at or after the timestamp; for exit we prefer
@@ -758,13 +774,110 @@ class BacktestService:
         )
 
         if not all_times:
-            return [], []
+            return (
+                [],
+                [],
+                {
+                    "per_bar": [],
+                    "total_candidates": 0,
+                    "total_accepted": 0,
+                },
+            )
 
         allow_short = bool(risk_config.get("allowShortSelling", True))
         max_pos_pct = float(risk_config.get("maxPositionSizePct", 100.0))
         per_trade_pct = risk_config.get("perTradeRiskPct")
         sl_pct = risk_config.get("stopLossPct")
         use_sl = risk_config.get("useStopLoss", True)
+
+        # Pre-compute simple features per symbol for scoring:
+        # - 20-bar momentum (close / close.shift(20) - 1)
+        # - 14-bar ATR (Wilder-style approx, expressed as % of price)
+        # - Volume normalisation vs 20-bar average.
+        features_by_symbol: Dict[str, pd.DataFrame] = {}
+        atr_window = 14
+        mom_window = 20
+        vol_window = 20
+        for symbol, df in price_data_by_symbol.items():
+            if df.empty:
+                continue
+            prices = df.copy()
+            prices = prices.sort_index()
+            close = prices["close"].astype(float)
+            high = prices["high"].astype(float)
+            low = prices["low"].astype(float)
+            prev_close = close.shift(1)
+            tr = (high - low).abs()
+            tr = pd.concat(
+                [
+                    tr,
+                    (high - prev_close).abs(),
+                    (low - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            atr = tr.rolling(atr_window, min_periods=1).mean()
+            atr_pct = atr / close.replace(0.0, float("nan"))
+            mom20 = close / close.shift(mom_window) - 1.0
+
+            vol = prices.get("volume")
+            if vol is not None:
+                vol = vol.fillna(0.0).astype(float)
+                vol_ma = vol.rolling(vol_window, min_periods=1).mean()
+                vol_ma = vol_ma.replace(0.0, float("nan"))
+                vol_norm = (vol / vol_ma).fillna(1.0)
+            else:
+                vol_norm = pd.Series(1.0, index=prices.index)
+
+            feats = pd.DataFrame(
+                {
+                    "mom20": mom20.fillna(0.0),
+                    "vol_norm": vol_norm,
+                    "atr_pct": atr_pct.fillna(0.0),
+                },
+                index=prices.index,
+            )
+            features_by_symbol[symbol] = feats
+
+        def _score_candidate(trade: TradeRecord) -> float:
+            """Compute a simple, interpretable score for a candidate trade."""
+
+            feats = features_by_symbol.get(trade.symbol)
+            if feats is None or feats.empty:
+                return 0.0
+            ts = trade.entry_timestamp
+            # Use features at the entry timestamp if present; otherwise last
+            # known features before that time.
+            if ts in feats.index:
+                row = feats.loc[ts]
+            else:
+                before = feats[feats.index <= ts]
+                if before.empty:
+                    return 0.0
+                row = before.iloc[-1]
+
+            mom = float(row.get("mom20", 0.0))
+            vol_norm = float(row.get("vol_norm", 1.0))
+            atr_pct_val = float(row.get("atr_pct", 0.0))
+
+            # Trend strength: positive momentum for longs, negative for shorts.
+            if trade.side == "long":
+                trend = max(mom, 0.0)
+            else:
+                trend = max(-mom, 0.0)
+
+            # Liquidity factor: favour higher-than-average volume but bound it.
+            liq = vol_norm
+            if liq < 0.2:
+                liq = 0.2
+            if liq > 3.0:
+                liq = 3.0
+
+            # Risk factor: penalise very volatile names (ATR as % of price).
+            risk_factor = 1.0 / (1.0 + max(atr_pct_val * 100.0, 0.0))
+
+            base = 0.1 + trend * 10.0
+            return float(base * liq * risk_factor)
 
         equity_curve: List[EquityPoint] = []
         executed_trades: List[TradeRecord] = []
@@ -775,6 +888,11 @@ class BacktestService:
 
         # Map exit timestamps to trades that should be closed then.
         exits_by_time: Dict[datetime, List[TradeRecord]] = {}
+
+        # Debug information about routing decisions per bar.
+        routing_per_bar: List[Dict[str, Any]] = []
+        routing_total_candidates = 0
+        routing_total_accepted = 0
 
         def _current_equity() -> float:
             equity_val = cash
@@ -853,18 +971,32 @@ class BacktestService:
 
                 executed_trades.append(trade)
 
-            # Process entries at this timestamp using a simple policy:
-            # pick the first symbol (alphabetically) that can be sized.
+            # Process entries at this timestamp using a capital-aware policy:
+            # consider all candidates, score them, and admit as many as
+            # capital and risk allow (no more "first symbol wins").
             entry_candidates = entries_by_time.get(ts, [])
             if entry_candidates:
-                equity_before = _current_equity()
-                for candidate in sorted(
-                    entry_candidates, key=lambda t: (t.entry_timestamp, t.symbol)
+                bar_candidates = len(entry_candidates)
+                accepted_here = 0
+                # Pre-score all candidates at this timestamp.
+                scored: List[Tuple[float, TradeRecord]] = []
+                for candidate in entry_candidates:
+                    scored.append((_score_candidate(candidate), candidate))
+
+                # Highest score first; tie-break by symbol and entry time.
+                for _score, candidate in sorted(
+                    scored,
+                    key=lambda item: (
+                        -item[0],
+                        item[1].symbol,
+                        item[1].entry_timestamp,
+                    ),
                 ):
                     side = candidate.side
                     if side == "short" and not allow_short:
                         continue
 
+                    equity_before = _current_equity()
                     cash_available = cash
                     base_size = float(candidate.size)
                     entry_price = _lookup_price(
@@ -920,13 +1052,28 @@ class BacktestService:
                         exit_reason=candidate.exit_reason,
                     )
                     exits_by_time.setdefault(candidate.exit_timestamp, []).append(trade)
-                    # We only open one trade per timestamp under the current policy.
-                    break
+                    accepted_here += 1
+
+                routing_total_candidates += bar_candidates
+                routing_total_accepted += accepted_here
+                routing_per_bar.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "candidates": float(bar_candidates),
+                        "accepted": float(accepted_here),
+                    }
+                )
 
             # Record equity after processing this timestamp.
             equity_curve.append(EquityPoint(timestamp=ts, equity=_current_equity()))
 
-        return equity_curve, executed_trades
+        routing_debug: Dict[str, Any] = {
+            "per_bar": routing_per_bar,
+            "total_candidates": float(routing_total_candidates),
+            "total_accepted": float(routing_total_accepted),
+        }
+
+        return equity_curve, executed_trades, routing_debug
 
     def resolve_group_symbols(
         self,

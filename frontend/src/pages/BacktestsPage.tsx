@@ -46,6 +46,15 @@ type BacktestMetrics = {
   final_value?: number;
   initial_capital?: number;
   pnl?: number;
+  routing_debug?: {
+    total_candidates?: number;
+    total_accepted?: number;
+    per_bar?: {
+      timestamp: string;
+      candidates: number;
+      accepted: number;
+    }[];
+  };
   [key: string]: unknown;
 };
 
@@ -1957,6 +1966,125 @@ export const BacktestsPage = () => {
                       >
                         {JSON.stringify(selectedBacktest.risk_config, null, 2)}
                       </Typography>
+                    </Box>
+                  )}
+                  {selectedBacktest.group_id && selectedBacktest.metrics && (
+                    <Box mt={2}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Capital-aware routing debug
+                      </Typography>
+                      {(() => {
+                        const metrics = selectedBacktest.metrics as BacktestMetrics;
+                        const dbg = metrics.routing_debug;
+                        if (!dbg) {
+                          return (
+                            <Typography
+                              variant="body2"
+                              color="textSecondary"
+                              mt={0.5}
+                            >
+                              No routing debug information recorded for this run.
+                            </Typography>
+                          );
+                        }
+                        const totalCandidates = dbg.total_candidates ?? 0;
+                        const totalAccepted = dbg.total_accepted ?? 0;
+                        const acceptedRatio =
+                          totalCandidates > 0
+                            ? (totalAccepted / totalCandidates) * 100
+                            : 0;
+                        const perBar = dbg.per_bar ?? [];
+                        const rowsToShow = perBar.slice(0, 200);
+                        return (
+                          <>
+                            <Typography variant="body2">
+                              Total candidates:{" "}
+                              {totalCandidates.toFixed(0)}; accepted:{" "}
+                              {totalAccepted.toFixed(0)} (
+                              {acceptedRatio.toFixed(1)}% of candidates
+                              executed).
+                            </Typography>
+                            <Typography
+                              variant="body2"
+                              color="textSecondary"
+                              mt={0.5}
+                            >
+                              Scoring legend: higher scores favour stronger
+                              trend in the strategy&apos;s direction, higher
+                              than average volume, and lower volatility (ATR as
+                              a % of price). At each bar, candidates are sorted
+                              by this score and admitted while capital and risk
+                              allow.
+                            </Typography>
+                            {rowsToShow.length > 0 && (
+                              <Box
+                                mt={1}
+                                sx={{
+                                  maxHeight: 220,
+                                  overflowY: "auto",
+                                  borderRadius: 1,
+                                  border: "1px solid rgba(255,255,255,0.08)",
+                                }}
+                              >
+                                <Table size="small">
+                                  <TableHead>
+                                    <TableRow>
+                                      <TableCell>Time</TableCell>
+                                      <TableCell align="right">
+                                        Candidates
+                                      </TableCell>
+                                      <TableCell align="right">
+                                        Accepted
+                                      </TableCell>
+                                      <TableCell align="right">
+                                        Skipped
+                                      </TableCell>
+                                    </TableRow>
+                                  </TableHead>
+                                  <TableBody>
+                                    {rowsToShow.map((row) => {
+                                      const ts = new Date(row.timestamp);
+                                      const skipped =
+                                        row.candidates - row.accepted;
+                                      return (
+                                        <TableRow
+                                          key={`${row.timestamp}-${row.candidates}-${row.accepted}`}
+                                        >
+                                          <TableCell>
+                                            {ts.toLocaleString("en-IN", {
+                                              timeZone: "Asia/Kolkata",
+                                            })}
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            {row.candidates.toFixed(0)}
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            {row.accepted.toFixed(0)}
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            {skipped.toFixed(0)}
+                                          </TableCell>
+                                        </TableRow>
+                                      );
+                                    })}
+                                  </TableBody>
+                                </Table>
+                              </Box>
+                            )}
+                            {perBar.length > rowsToShow.length && (
+                              <Typography
+                                variant="caption"
+                                color="textSecondary"
+                                display="block"
+                                mt={0.5}
+                              >
+                                Showing first {rowsToShow.length} of{" "}
+                                {perBar.length} bars with candidates.
+                              </Typography>
+                            )}
+                          </>
+                        );
+                      })()}
                     </Box>
                   )}
                   {detailState === "error" && detailError && (
