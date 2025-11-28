@@ -57,6 +57,9 @@ type RiskConfig = {
   takeProfitPct?: number | null;
   useStopLoss?: boolean | null;
   useTakeProfit?: boolean | null;
+  stopLossMode?: "auto" | "custom" | null;
+  stopLossAtrMult?: number | null;
+  phasedStopLoss?: boolean | null;
 };
 
 type CostsConfig = {
@@ -262,11 +265,14 @@ export const BacktestsPage = () => {
   const [runRiskConfig, setRunRiskConfig] = useState<RiskConfig>({
     maxPositionSizePct: 20,
     perTradeRiskPct: 1,
-    allowShortSelling: true,
-    stopLossPct: 3,
-    takeProfitPct: 7,
-    useStopLoss: true,
-    useTakeProfit: true
+    allowShortSelling: false,
+    stopLossPct: null,
+    takeProfitPct: null,
+    useStopLoss: null,
+    useTakeProfit: null,
+    stopLossMode: "auto",
+    stopLossAtrMult: 2,
+    phasedStopLoss: false
   });
   const [runCostsConfig, setRunCostsConfig] = useState<CostsConfig>({});
 
@@ -295,6 +301,8 @@ export const BacktestsPage = () => {
     setTimeframe("1h");
     setDateMode("relative");
     setRelativeDuration("1y");
+    setDateMode("relative");
+    setRelativeDuration("1y");
     const today = new Date();
     const endIso = today.toISOString().slice(0, 10);
     const start = new Date(today);
@@ -310,11 +318,14 @@ export const BacktestsPage = () => {
     setRunRiskConfig({
       maxPositionSizePct: 20,
       perTradeRiskPct: 1,
-      allowShortSelling: true,
-      stopLossPct: 3,
-      takeProfitPct: 7,
-      useStopLoss: true,
-      useTakeProfit: true
+      allowShortSelling: false,
+      stopLossPct: null,
+      takeProfitPct: null,
+      useStopLoss: null,
+      useTakeProfit: null,
+      stopLossMode: "auto",
+      stopLossAtrMult: 2,
+      phasedStopLoss: false
     });
     setRunCostsConfig({
       broker: "zerodha",
@@ -2277,6 +2288,9 @@ export const BacktestsPage = () => {
                   control={
                     <Switch
                       checked={Boolean(runRiskConfig.allowShortSelling)}
+                      disabled={
+                        (runCostsConfig.productType ?? "auto") !== "intraday"
+                      }
                       onChange={(e) =>
                         setRunRiskConfig((prev) => ({
                           ...prev,
@@ -2292,44 +2306,99 @@ export const BacktestsPage = () => {
                     <FormControlLabel
                       control={
                         <Switch
-                          checked={runRiskConfig.useStopLoss ?? true}
+                          checked={Boolean(runRiskConfig.useStopLoss)}
                           onChange={(e) =>
                             setRunRiskConfig((prev) => ({
                               ...prev,
-                              useStopLoss: e.target.checked
+                              useStopLoss: e.target.checked ? true : null
                             }))
                           }
                         />
                       }
                       label="Apply default stop-loss"
                     />
-                    <TextField
-                      fullWidth
-                      margin="normal"
-                      label="Default stop-loss (%)"
-                      type="number"
-                      value={runRiskConfig.stopLossPct ?? ""}
-                      disabled={runRiskConfig.useStopLoss === false}
-                      onChange={(e) =>
-                        setRunRiskConfig((prev) => ({
-                          ...prev,
-                          stopLossPct:
-                            e.target.value === ""
-                              ? null
-                              : Number.parseFloat(e.target.value)
-                        }))
-                      }
-                    />
+                    {runRiskConfig.useStopLoss ? (
+                      <>
+                        <TextField
+                          select
+                          fullWidth
+                          margin="normal"
+                          label="Stop-loss mode"
+                          value={runRiskConfig.stopLossMode ?? "auto"}
+                          onChange={(e) =>
+                            setRunRiskConfig((prev) => ({
+                              ...prev,
+                              stopLossMode: e.target.value as
+                                | "auto"
+                                | "custom",
+                            }))
+                          }
+                        >
+                          <MenuItem value="auto">Auto (ATR-based)</MenuItem>
+                          <MenuItem value="custom">Custom (%)</MenuItem>
+                        </TextField>
+                        {runRiskConfig.stopLossMode === "auto" ? (
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="ATR multiple for stop-loss"
+                            type="number"
+                            value={runRiskConfig.stopLossAtrMult ?? ""}
+                            onChange={(e) =>
+                              setRunRiskConfig((prev) => ({
+                                ...prev,
+                                stopLossAtrMult:
+                                  e.target.value === ""
+                                    ? null
+                                    : Number.parseFloat(e.target.value),
+                              }))
+                            }
+                            helperText="Uses ATR * multiple as stop distance per trade."
+                          />
+                        ) : (
+                          <TextField
+                            fullWidth
+                            margin="normal"
+                            label="Default stop-loss (%)"
+                            type="number"
+                            value={runRiskConfig.stopLossPct ?? ""}
+                            onChange={(e) =>
+                              setRunRiskConfig((prev) => ({
+                                ...prev,
+                                stopLossPct:
+                                  e.target.value === ""
+                                    ? null
+                                    : Number.parseFloat(e.target.value),
+                              }))
+                            }
+                          />
+                        )}
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={Boolean(runRiskConfig.phasedStopLoss)}
+                              onChange={(e) =>
+                                setRunRiskConfig((prev) => ({
+                                  ...prev,
+                                  phasedStopLoss: e.target.checked,
+                                }))
+                              }
+                            />
+                          }
+                          label="Use phased stop-loss (1/3 exits)"
+                        />
+                      </>
+                    ) : null}
                   </Grid>
                   <Grid item xs={6}>
                     <FormControlLabel
                       control={
                         <Switch
-                          checked={runRiskConfig.useTakeProfit ?? true}
+                          checked={Boolean(runRiskConfig.useTakeProfit)}
                           onChange={(e) =>
                             setRunRiskConfig((prev) => ({
                               ...prev,
-                              useTakeProfit: e.target.checked
+                              useTakeProfit: e.target.checked ? true : null
                             }))
                           }
                         />
@@ -2342,7 +2411,7 @@ export const BacktestsPage = () => {
                       label="Default take-profit (%)"
                       type="number"
                       value={runRiskConfig.takeProfitPct ?? ""}
-                      disabled={runRiskConfig.useTakeProfit === false}
+                      disabled={!runRiskConfig.useTakeProfit}
                       onChange={(e) =>
                         setRunRiskConfig((prev) => ({
                           ...prev,
@@ -2377,17 +2446,24 @@ export const BacktestsPage = () => {
                   margin="normal"
                   label="Product type"
                   value={runCostsConfig.productType ?? "auto"}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const product = e.target.value as
+                      | "auto"
+                      | "intraday"
+                      | "delivery";
                     setRunCostsConfig((prev) => ({
                       ...prev,
                       broker: "zerodha",
                       segment: "equity",
-                      productType: e.target.value as
-                        | "auto"
-                        | "intraday"
-                        | "delivery"
-                    }))
-                  }
+                      productType: product,
+                    }));
+                    if (product !== "intraday") {
+                      setRunRiskConfig((prev) => ({
+                        ...prev,
+                        allowShortSelling: false,
+                      }));
+                    }
+                  }}
                   helperText="Auto: classify each trade as intraday or delivery based on holding period (short trades treated as intraday)."
                 >
                   <MenuItem value="auto">Auto (infer from trades)</MenuItem>

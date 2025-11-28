@@ -228,6 +228,21 @@ if bt is not None:
             per_risk_pct = self.p.per_trade_risk_pct
             sl_pct = getattr(self.p, "stop_loss_pct", None)
             use_sl = getattr(self.p, "use_stop_loss", True)
+
+            # When auto stop-loss mode is enabled on strategies that expose
+            # ATR (e.g. ZeroLagTrendMtfStrategy), approximate an equivalent
+            # percentage distance so sizing logic can stay generic.
+            stop_mode = getattr(self.p, "stop_loss_mode", "custom")
+            stop_atr_mult = getattr(self.p, "stop_loss_atr_mult", None)
+            if (
+                stop_mode == "auto"
+                and stop_atr_mult is not None
+                and hasattr(self, "_atr")
+            ):
+                atr_val = getattr(self, "_atr", None)
+                if atr_val is not None and price > 0.0:
+                    distance = float(atr_val) * float(stop_atr_mult)
+                    sl_pct = (distance / price) * 100.0
             if (
                 per_risk_pct is not None
                 and use_sl
@@ -373,6 +388,9 @@ if bt is not None:
             mult=1.2,
             stop_loss_pct=2.0,
             take_profit_pct=4.0,
+            stop_loss_mode="custom",
+            stop_loss_atr_mult=2.0,
+            phased_stop_loss=False,
             take_long_only=False,
             pyramid_limit=2,
         )
@@ -405,6 +423,10 @@ if bt is not None:
 
             # Discrete trend state (+1, 0, -1).
             self.trend = 0
+
+            # Phased stop-loss bookkeeping (per position).
+            self._sl_base_size: int | None = None
+            self._sl_stage: int = 0  # 0=no SL hit, 1/2 partial, 3=all done
 
         def next(self) -> None:  # type: ignore[override]
             super().next()
@@ -472,14 +494,56 @@ if bt is not None:
             # Stop-loss / take-profit exits.
             use_sl = bool(getattr(self.p, "use_stop_loss", True))
             use_tp = bool(getattr(self.p, "use_take_profit", True))
+            stop_mode = getattr(self.p, "stop_loss_mode", "custom")
+            stop_atr_mult = getattr(self.p, "stop_loss_atr_mult", 2.0)
+            phased_sl = bool(getattr(self.p, "phased_stop_loss", False))
+
+            # Reset phased SL state when flat.
+            if self.position.size == 0:
+                self._sl_base_size = None
+                self._sl_stage = 0
 
             if self.position.size > 0:
                 entry = float(self.position.price)
-                stop = entry * (1.0 - float(self.p.stop_loss_pct) / 100.0)
+                # Effective stop-loss distance.
+                sl_pct = float(self.p.stop_loss_pct)
+                if (
+                    stop_mode == "auto"
+                    and self._atr is not None
+                    and float(stop_atr_mult) > 0.0
+                    and entry > 0.0
+                ):
+                    distance = float(self._atr) * float(stop_atr_mult)
+                    sl_pct = (distance / entry) * 100.0
+
+                # Track base size for phased exits.
+                if phased_sl and self._sl_base_size is None:
+                    self._sl_base_size = int(abs(self.position.size))
+
+                # Base stop levels.
+                stop1 = entry * (1.0 - sl_pct / 100.0)
+                stop2 = entry * (1.0 - (sl_pct * 1.33) / 100.0)
+                stop3 = entry * (1.0 - (sl_pct * 1.66) / 100.0)
+
                 target = entry * (1.0 + float(self.p.take_profit_pct) / 100.0)
                 low = float(self.data.low[0])
                 high = float(self.data.high[0])
-                if use_sl and low <= stop:
+                if use_sl and phased_sl and self._sl_base_size:
+                    # Phased exits: 1/3 + 1/3 + final.
+                    unit = max(1, int(round(self._sl_base_size / 3.0)))
+                    if self._sl_stage < 1 and low <= stop1:
+                        self._pending_exit_reason = "phased stop-loss level 1 (long)"
+                        self.sell(size=min(unit, self.position.size))
+                        self._sl_stage = 1
+                    elif self._sl_stage < 2 and low <= stop2:
+                        self._pending_exit_reason = "phased stop-loss level 2 (long)"
+                        self.sell(size=min(unit, self.position.size))
+                        self._sl_stage = 2
+                    elif self._sl_stage < 3 and low <= stop3:
+                        self._pending_exit_reason = "phased stop-loss level 3 (long)"
+                        self.close()
+                        self._sl_stage = 3
+                elif use_sl and low <= stop1:
                     self._pending_exit_reason = "stop-loss hit (long)"
                     self.close()
                 elif use_tp and high >= target:
@@ -487,11 +551,41 @@ if bt is not None:
                     self.close()
             elif self.position.size < 0:
                 entry = float(self.position.price)
-                stop = entry * (1.0 + float(self.p.stop_loss_pct) / 100.0)
+                sl_pct = float(self.p.stop_loss_pct)
+                if (
+                    stop_mode == "auto"
+                    and self._atr is not None
+                    and float(stop_atr_mult) > 0.0
+                    and entry > 0.0
+                ):
+                    distance = float(self._atr) * float(stop_atr_mult)
+                    sl_pct = (distance / entry) * 100.0
+
+                if phased_sl and self._sl_base_size is None:
+                    self._sl_base_size = int(abs(self.position.size))
+
+                stop1 = entry * (1.0 + sl_pct / 100.0)
+                stop2 = entry * (1.0 + (sl_pct * 1.33) / 100.0)
+                stop3 = entry * (1.0 + (sl_pct * 1.66) / 100.0)
+
                 target = entry * (1.0 - float(self.p.take_profit_pct) / 100.0)
                 high = float(self.data.high[0])
                 low = float(self.data.low[0])
-                if use_sl and high >= stop:
+                if use_sl and phased_sl and self._sl_base_size:
+                    unit = max(1, int(round(self._sl_base_size / 3.0)))
+                    if self._sl_stage < 1 and high >= stop1:
+                        self._pending_exit_reason = "phased stop-loss level 1 (short)"
+                        self.buy(size=min(unit, abs(self.position.size)))
+                        self._sl_stage = 1
+                    elif self._sl_stage < 2 and high >= stop2:
+                        self._pending_exit_reason = "phased stop-loss level 2 (short)"
+                        self.buy(size=min(unit, abs(self.position.size)))
+                        self._sl_stage = 2
+                    elif self._sl_stage < 3 and high >= stop3:
+                        self._pending_exit_reason = "phased stop-loss level 3 (short)"
+                        self.close()
+                        self._sl_stage = 3
+                elif use_sl and high >= stop1:
                     self._pending_exit_reason = "stop-loss hit (short)"
                     self.close()
                 elif use_tp and low <= target:
@@ -585,7 +679,11 @@ class BacktraderEngine:
         broker_product = str(
             costs_cfg.get("productType") or costs_cfg.get("product") or "auto"
         ).lower()
-        allow_short = bool(risk_cfg.get("allowShortSelling", True))
+        allow_short = bool(risk_cfg.get("allowShortSelling", False))
+        if broker_product != "intraday":
+            # Only intraday (MIS) product may allow shorts; delivery/cash
+            # positions are treated as long-only.
+            allow_short = False
 
         # Map high-level risk settings into engine/strategy params where
         # meaningful. For engines that support configurable SL/TP (like
@@ -593,15 +691,24 @@ class BacktraderEngine:
         # defaults. We also propagate sizing-related settings and the flags
         # that decide whether SL/TP overlays are applied at all.
         strategy_params: Dict[str, Any] = dict(config.params)
+        use_sl = risk_cfg.get("useStopLoss")
+        use_tp = risk_cfg.get("useTakeProfit")
+        stop_mode = risk_cfg.get("stopLossMode")
+        stop_atr_mult = risk_cfg.get("stopLossAtrMult")
+        phased_sl = risk_cfg.get("phasedStopLoss")
         if config.strategy_code == "ZeroLagTrendMtfStrategy":
             sl_pct = risk_cfg.get("stopLossPct")
             tp_pct = risk_cfg.get("takeProfitPct")
-            if isinstance(sl_pct, (int, float)):
+            if use_sl is True and isinstance(sl_pct, (int, float)):
                 strategy_params["stop_loss_pct"] = float(sl_pct)
-            if isinstance(tp_pct, (int, float)):
+            if use_tp is True and isinstance(tp_pct, (int, float)):
                 strategy_params["take_profit_pct"] = float(tp_pct)
-        use_sl = risk_cfg.get("useStopLoss")
-        use_tp = risk_cfg.get("useTakeProfit")
+            if isinstance(stop_mode, str):
+                strategy_params["stop_loss_mode"] = stop_mode
+            if isinstance(stop_atr_mult, (int, float)):
+                strategy_params["stop_loss_atr_mult"] = float(stop_atr_mult)
+            if isinstance(phased_sl, bool):
+                strategy_params["phased_stop_loss"] = phased_sl
         max_pos_pct = risk_cfg.get("maxPositionSizePct")
         per_trade_pct = risk_cfg.get("perTradeRiskPct")
         if isinstance(max_pos_pct, (int, float)):
