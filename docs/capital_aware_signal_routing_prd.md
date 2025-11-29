@@ -213,7 +213,6 @@ In scope:
 - Routing capital across signals **within a single strategy** for a given group.
 - Respecting existing risk_config and costs_config.
 - Providing clear metrics and diagnostics.
-
 Out of scope (for now):
 
 - Full portfolio optimisation (choosing strategy mixes, rebalancing schedules, etc.).
@@ -250,3 +249,74 @@ These belong to a separate **Portfolio Management / Optimisation PRD**.
      - Group BT no longer suffers from arbitrary “first symbol wins” behaviour.
 
 Once this is stable, we can layer more sophisticated scoring or incorporate portfolio‑level objectives, but the core routing semantics will stay the same.
+
+---
+
+## 8. V1 Implementation Notes (S12/G01–G04)
+
+This section documents how the first implementation (S12) realises the above PRD so we can keep design and code aligned.
+
+### 8.1 Scoring model (implemented)
+
+- Implemented in `BacktestService._run_portfolio_simulator` as `score_candidate(trade, features)`.
+- Per‑symbol features are derived from the same OHLCV used for backtesting:
+  - `mom20`: 20‑bar percentage momentum on close.
+  - `atr_pct`: ATR(14) normalised by price (ATR ÷ close).
+  - `vol_norm`: recent volume vs 20‑bar average volume, clamped into `[0.2, 3.0]` to avoid extremes.
+- For each candidate trade:
+  - A **trend component** favours longs with positive momentum and shorts with negative momentum.
+  - A **liquidity factor** upscores higher‑volume names via `vol_norm`.
+  - A **risk factor** down‑weights very volatile symbols using `1 / (1 + atr_pct * 100)`.
+- The resulting score is a single float; higher is better. All inputs are based on current/past bars only (no look‑ahead).
+- The model is intentionally simple and is wired so it can be replaced or extended in future sprints without changing the simulator contract.
+
+### 8.2 Multi‑candidate allocation per bar
+
+- `_run_portfolio_simulator` now:
+  - Groups candidate entries by `entry_timestamp`.
+  - At each bar:
+    - Applies all exits first, updating `cash`, open positions, and equity.
+    - Recomputes per‑symbol features and scores all entry candidates at that timestamp.
+    - Filters out candidates whose feasible size is zero when passed through `_compute_order_size` (respecting current equity, cash, `maxPositionSizePct`, `perTradeRiskPct`, and broker constraints).
+    - Sorts remaining candidates by **score descending**, then by `(symbol, entry time)` for deterministic tie‑breaks.
+    - Iterates this ordered list and, for each candidate:
+      - Recomputes a feasible size using the up‑to‑date equity/cash.
+      - Opens the trade if `size > 0`, updating `cash` and positions and scheduling its exit.
+  - There is currently **no hard cap** on new positions per bar beyond what risk settings naturally impose; a `max_positions_per_bar` guard can be added later if needed.
+- This replaces the old “first candidate wins” behaviour and allows multiple trades at the same bar when capital and risk limits permit.
+
+### 8.3 Routing metrics & diagnostics
+
+- `_run_portfolio_simulator` now returns a third object, `routing_debug`, alongside the equity curve and executed trades:
+  - `total_candidates`: count of all candidate entries considered across the run.
+  - `total_accepted`: count of entries that actually became funded trades.
+  - `per_bar`: list of records with:
+    - `timestamp`
+    - `candidates` – number of entries seen at that bar.
+    - `accepted` – number of entries funded at that bar.
+- For group backtests:
+  - `run_group_backtest` stores `routing_debug` inside `Backtest.metrics_json["routing_debug"]`.
+  - Per‑symbol summaries (trades and PnL) are also captured under `metrics_json["per_symbol"]`.
+- The Backtests UI surfaces a compact debug view for group runs:
+  - Shows total candidates vs accepted and the overall acceptance rate.
+  - Displays a truncated per‑bar table (first ~200 bars) so you can spot where capital bottlenecks occur.
+  - Includes a short legend explaining that higher‑scored, more liquid, less volatile names are favoured when capital is tight.
+
+### 8.4 Interplay with group benchmarks
+
+- The yellow **projection** curve in Backtest charts has been redefined to be a realistic benchmark for group runs:
+  - For a single symbol: equal‑weight buy‑and‑hold of that symbol using the initial capital.
+  - For a group: equal‑weight buy‑and‑hold of all symbols in the group, with **rebalance** when a symbol’s data first appears (late entrants cause a pro‑rata reslice of the portfolio).
+  - This benchmark is independent of routing decisions and lets us compare:
+    - Capital‑aware routed equity vs a naïve static basket.
+- This behaviour is implemented in `/api/backtests/{id}/chart-data` by computing a synthetic benchmark equity curve from cached OHLCV for each symbol.
+
+### 8.5 Deviations and future refinements
+
+- The PRD allowed for a configurable cap on new positions per bar; v1 does **not** yet expose such a setting, relying solely on risk and cash constraints.
+- Scoring currently uses only `mom20`, `ATR%`, and relative volume:
+  - Indicators like RSI, MACD, Bollinger Bands or external ranking feeds are not yet integrated.
+- Future sprints may:
+  - Make `score_candidate` pluggable per strategy or per group.
+  - Add richer diagnostics (e.g. score distributions for executed vs skipped trades).
+  - Backtest alternative scoring schemes against the same candidate set to compare portfolio‑level outcomes.

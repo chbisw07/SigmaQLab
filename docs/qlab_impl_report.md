@@ -1767,3 +1767,80 @@ Sprint workbook updates for S09/G03–G04:
 In addition, the Backtests UI now exposes a **Data source mode** select (Auto vs Cache only) whose value is passed as `price_source` to the backend; the Data Manager interprets this so that:
 - `Auto (local cache + Kite)` allows external fetches when coverage is missing.
 - `Cache only` forces backtests to rely solely on existing local OHLCV data, making it easy to test purely‑cache scenarios without hitting external APIs.
+
+---
+
+## Sprint S12 – Capital‑Aware Signal Routing (G01–G04)
+
+**Group:** G01 – Capital‑aware signal routing: scoring model and PRD alignment
+**Tasks:** S12_G01_TB001–TB002
+**Status (Codex):** implemented
+
+### S12_G01_TB001/TB002 – Scoring model and score_candidate helper
+
+- Finalised the capital‑aware routing design in `docs/capital_aware_signal_routing_prd.md`, adding an implementation‑focused section that documents the v1 scoring model, allocation rules, diagnostics, and interaction with group benchmarks.
+- Implemented a concrete scoring helper inside `BacktestService._run_portfolio_simulator` (`backend/app/backtest_service.py`):
+  - Precomputes per‑symbol features from OHLCV:
+    - 20‑bar percentage momentum (`mom20`),
+    - 14‑bar ATR as a fraction of price (`atr_pct`),
+    - relative volume vs 20‑bar average (`vol_norm`, clamped into `[0.2, 3.0]`).
+  - Computes a single float score per candidate trade that:
+    - Favours longs with positive momentum and shorts with negative momentum.
+    - Upscores liquid names via `vol_norm`.
+    - Down‑weights highly volatile symbols via a `1 / (1 + atr_pct * 100)` factor.
+  - Uses only current/past data (no look‑ahead) and is wired so it can be replaced or extended in future sprints.
+
+**Group:** G02 – Portfolio simulator: multi‑candidate allocation per bar
+**Tasks:** S12_G02_TB001–TB002
+**Status (Codex):** implemented
+
+### S12_G02_TB001/TB002 – Multi‑candidate routing under risk constraints
+
+- Refactored `BacktestService._run_portfolio_simulator` so group backtests can fund **multiple entry candidates per bar** instead of “first candidate wins”:
+  - Groups candidate trades by `entry_timestamp`.
+  - At each bar:
+    - Processes exits first (freeing capital).
+    - Scores all entry candidates using the new scoring helper.
+    - Filters out candidates whose feasible size is zero when passed through `SigmaBaseStrategy._compute_order_size` (respecting current equity, cash, `maxPositionSizePct`, `perTradeRiskPct`, and broker constraints).
+    - Sorts remaining candidates by score descending, then deterministically by `(symbol, entry time)`.
+    - Iterates this list, recomputing feasible size as equity/cash change, and opens each trade with `size > 0`.
+  - There is no explicit cap on new positions per bar in v1; risk settings naturally limit the number of concurrent positions.
+- Kept broker semantics aligned with earlier work:
+  - `allowShortSelling` is forced off for non‑MIS product types.
+  - Intraday vs delivery (MIS vs CNC) continues to be handled by the costs model and strategy engine.
+- Verified via synthetic scenarios that cash/equity updates remain consistent when several trades are opened and closed on the same timestamp.
+
+**Group:** G03 – Capital‑aware routing metrics and diagnostics
+**Tasks:** S12_G03_TB001–TF001
+**Status (Codex):** implemented
+
+### S12_G03_TB001/TF001 – Routing debug and group benchmark curve
+
+- Extended portfolio metrics and chart‑data responses for group runs:
+  - `_run_portfolio_simulator` now returns a `routing_debug` structure containing:
+    - `total_candidates`, `total_accepted`,
+    - a `per_bar` list of `{timestamp, candidates, accepted}` counts.
+  - `BacktestService.run_group_backtest` stores `routing_debug` under `Backtest.metrics_json["routing_debug"]` and adds a `per_symbol` breakdown (trades and net PnL per symbol).
+- Redesigned the yellow **projection** line in `/api/backtests/{id}/chart-data` (`backend/app/routers/backtests.py`) to be a realistic benchmark rather than an “all trades held forever” curve:
+  - For single‑symbol backtests: equal‑weight buy‑and‑hold of that symbol using `initial_capital`.
+  - For group backtests: equal‑weight buy‑and‑hold of all symbols with data, with **rebalance** when a new symbol’s data first appears (late entrants cause a pro‑rata reslice across the expanded universe).
+  - Implemented using the same `_load_price_dataframe` helper as the engine so timeframe aggregation and price sourcing are consistent.
+- Updated the Backtests UI (`frontend/src/pages/BacktestsPage.tsx` and `frontend/src/features/backtests/components/BacktestDetailChart.tsx`) to:
+  - Keep the blue curve as realised equity from routed trades and the yellow curve as a **group benchmark** line.
+  - Show a concise **Capital‑aware routing debug** panel for group runs with totals and a truncated per‑bar table.
+  - Add a short legend explaining that the router prefers higher‑scored, more liquid, less volatile names when capital is tight.
+
+**Group:** G04 – Group BT validation: trade correctness harness
+**Tasks:** S12_G04_TB001–TB002
+**Status (Codex):** implemented
+
+### S12_G04_TB001/TB002 – Group routing test harness
+
+- Added `backend/tests/test_group_backtests_routing.py` with focused tests for the new simulator and costs model:
+  - `test_portfolio_simulator_respects_max_position_and_short_flag`:
+    - Builds synthetic price data for two symbols and two opposing candidates on the same bar.
+    - Asserts that `_run_portfolio_simulator` honours `maxPositionSizePct` and `allowShortSelling` (short trades are skipped when disallowed, and long size is clamped to the appropriate notional).
+    - Verifies that routing diagnostics report the correct candidate vs accepted counts.
+  - `test_costs_model_sets_mis_vs_cnc_order_types`:
+    - Confirms `_apply_costs_indian_equity` correctly tags intraday trades as MIS and multi‑day trades as CNC under the Zerodha costs model.
+- These tests provide a regression harness for capital‑aware routing and MIS/CNC classification, and will be extended as the scoring model and portfolio logic evolve.

@@ -407,24 +407,124 @@ async def get_backtest_chart_data(
         .all()
     )
 
-    # Simple aggregated projection curve: for each price bar, compute the
-    # hypothetical equity if all trades were held from their entry until that
-    # bar, ignoring actual exits.
+    # Group benchmark / portfolio curve: equal-weight buy-and-hold of the
+    # backtest's symbol set, starting from initial capital. For multi-symbol
+    # (group) backtests, we:
+    # - Invest equally across all symbols that have data at their first bar.
+    # - Treat late data availability as a rebalance event: recompute equal
+    #   weights across the expanded active set using current portfolio equity.
+    # For single-symbol backtests, this reduces to a simple buy-and-hold of
+    # that symbol.
     projection_curve: List[BacktestEquityPointRead] = []
     initial_capital = backtest.initial_capital
-    for bar in price_bars:
-        close_price = bar.close
-        ts = bar.timestamp
-        # Aggregate unrealised PnL for all trades that have opened by this time.
-        hold_pnl = 0.0
-        for trade in trades:
-            if trade.entry_timestamp > ts:
-                continue
-            direction = 1.0 if trade.side == "long" else -1.0
-            hold_pnl += direction * (close_price - trade.entry_price) * trade.size
-        projection_curve.append(
-            BacktestEquityPointRead(timestamp=ts, equity=initial_capital + hold_pnl)
+
+    service = BacktestService()
+
+    symbols_for_index = list(backtest.symbols_json or [symbol])
+
+    # Load close series per symbol using the same helper as the engine so
+    # timeframe aggregation behaviour is consistent.
+    series_by_symbol: dict[str, list[tuple[datetime, float]]] = {}
+    for sym in symbols_for_index:
+        df = service._load_price_dataframe(  # type: ignore[attr-defined]
+            prices_db=prices_db,
+            symbol=sym,
+            timeframe=backtest.timeframe,
+            start=backtest.start_date,
+            end=backtest.end_date,
         )
+        if df is None or df.empty:
+            continue
+        closes_series = df["close"].astype(float)
+        points: list[tuple[datetime, float]] = []
+        for ts_idx, close_val in closes_series.items():
+            ts_dt = (
+                ts_idx.to_pydatetime() if hasattr(ts_idx, "to_pydatetime") else ts_idx
+            )
+            points.append((ts_dt, float(close_val)))
+        if points:
+            # Ensure sorted by time.
+            points.sort(key=lambda x: x[0])
+            series_by_symbol[sym] = points
+
+    if series_by_symbol and price_bars:
+        # Track per-symbol iterators and last known closes.
+        pos_by_symbol: dict[str, int] = {s: 0 for s in series_by_symbol}
+        last_close: dict[str, float] = {}
+        first_seen: dict[str, datetime] = {
+            s: series[0][0] for s, series in series_by_symbol.items()
+        }
+
+        active_symbols: set[str] = set()
+        shares: dict[str, float] = {}
+        equity = float(initial_capital)
+
+        for bar in price_bars:
+            ts = bar.timestamp
+
+            # Advance each symbol's iterator up to this timestamp and keep
+            # track of its latest close.
+            for sym, series in series_by_symbol.items():
+                idx = pos_by_symbol[sym]
+                while idx < len(series) and series[idx][0] <= ts:
+                    last_close[sym] = series[idx][1]
+                    idx += 1
+                pos_by_symbol[sym] = idx
+
+            # New entrants are symbols whose first bar is at this timestamp.
+            new_symbols = [
+                sym for sym, first_ts in first_seen.items() if first_ts == ts
+            ]
+
+            if not active_symbols and new_symbols:
+                # Initial allocation across the first active set.
+                active_symbols.update(new_symbols)
+                if active_symbols:
+                    per_name_cap = equity / float(len(active_symbols))
+                    shares = {
+                        sym: per_name_cap / last_close[sym]
+                        for sym in active_symbols
+                        if sym in last_close and last_close[sym] > 0.0
+                    }
+            elif new_symbols:
+                # Rebalance when late entrants appear: compute current equity
+                # using latest closes, then re-slice equally across the
+                # expanded active set.
+                if active_symbols:
+                    equity = sum(
+                        shares.get(sym, 0.0) * last_close.get(sym, 0.0)
+                        for sym in active_symbols
+                    )
+                active_symbols.update(new_symbols)
+                if active_symbols:
+                    per_name_cap = equity / float(len(active_symbols))
+                    shares = {
+                        sym: per_name_cap / last_close[sym]
+                        for sym in active_symbols
+                        if sym in last_close and last_close[sym] > 0.0
+                    }
+
+            # Compute benchmark equity at this timestamp.
+            if active_symbols:
+                equity = sum(
+                    shares.get(sym, 0.0) * last_close.get(sym, 0.0)
+                    for sym in active_symbols
+                )
+            else:
+                equity = float(initial_capital)
+
+            projection_curve.append(
+                BacktestEquityPointRead(timestamp=ts, equity=equity)
+            )
+    else:
+        # Fallback: no series available; keep a flat projection at initial capital.
+        projection_curve = [
+            BacktestEquityPointRead(
+                timestamp=p.timestamp,
+                equity=float(initial_capital),
+            )
+            for p in equity_points
+        ]
 
     # Adapt indicators dict to IndicatorPoint lists for the response model.
     indicator_series = {
