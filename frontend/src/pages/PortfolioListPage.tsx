@@ -1,4 +1,8 @@
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
   Box,
   Button,
   Chip,
@@ -14,9 +18,9 @@ import {
   Switch,
   TextField,
   Typography,
-  Snackbar,
-  Alert
+  Snackbar
 } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import {
   DataGrid,
   type GridColDef,
@@ -113,10 +117,21 @@ export const PortfolioListPage = () => {
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [runTargetId, setRunTargetId] = useState<number | null>(null);
+  const [runDateMode, setRunDateMode] = useState<"relative" | "custom">(
+    "relative"
+  );
+  const [runDuration, setRunDuration] = useState<
+    "1d" | "5d" | "1m" | "3m" | "6m" | "1y" | "2y" | "3y"
+  >("1y");
   const [runStartDate, setRunStartDate] = useState("");
   const [runEndDate, setRunEndDate] = useState("");
   const [runInterval, setRunInterval] = useState("1d");
   const [runInitialCapital, setRunInitialCapital] = useState("100000");
+  const [runStartTime, setRunStartTime] = useState("09:15");
+  const [runEndTime, setRunEndTime] = useState("15:30");
+  const [runBenchmark, setRunBenchmark] = useState("none");
+  const [runCostModel, setRunCostModel] = useState("zerodha_default");
+  const [runDataSourceMode, setRunDataSourceMode] = useState("auto");
   const [runState, setRunState] = useState<FetchState>("idle");
   const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null);
   const [snackbarSeverity, setSnackbarSeverity] = useState<
@@ -268,10 +283,17 @@ export const PortfolioListPage = () => {
 
   const handleOpenRunDialog = (id: number) => {
     setRunTargetId(id);
+    setRunDateMode("relative");
+    setRunDuration("1y");
     setRunStartDate("");
     setRunEndDate("");
     setRunInterval("1d");
     setRunInitialCapital("100000");
+    setRunStartTime("09:15");
+    setRunEndTime("15:30");
+    setRunBenchmark("none");
+    setRunCostModel("zerodha_default");
+    setRunDataSourceMode("auto");
     setRunState("idle");
     setRunDialogOpen(true);
   };
@@ -283,20 +305,73 @@ export const PortfolioListPage = () => {
   const handleSubmitRunDialog = async (event: FormEvent) => {
     event.preventDefault();
     if (!runTargetId) return;
-    if (!runStartDate || !runEndDate) {
-      setRunState("error");
-      setSnackbarSeverity("error");
-      setSnackbarMessage("Start and end dates are required.");
-      return;
-    }
 
     setRunState("loading");
 
+    // Derive effective start/end dates based on date mode and duration.
+    let effectiveStart = runStartDate;
+    let effectiveEnd = runEndDate;
+
+    if (runDateMode === "relative") {
+      const end = new Date();
+      const start = new Date(end);
+      switch (runDuration) {
+        case "1d":
+          start.setDate(end.getDate() - 1);
+          break;
+        case "5d":
+          start.setDate(end.getDate() - 5);
+          break;
+        case "1m":
+          start.setMonth(end.getMonth() - 1);
+          break;
+        case "3m":
+          start.setMonth(end.getMonth() - 3);
+          break;
+        case "6m":
+          start.setMonth(end.getMonth() - 6);
+          break;
+        case "1y":
+          start.setFullYear(end.getFullYear() - 1);
+          break;
+        case "2y":
+          start.setFullYear(end.getFullYear() - 2);
+          break;
+        case "3y":
+          start.setFullYear(end.getFullYear() - 3);
+          break;
+        default:
+          break;
+      }
+      effectiveStart = start.toISOString().slice(0, 10);
+      effectiveEnd = end.toISOString().slice(0, 10);
+    } else {
+      if (!runStartDate || !runEndDate) {
+        setRunState("error");
+        setSnackbarSeverity("error");
+        setSnackbarMessage("Start and end dates are required.");
+        return;
+      }
+      effectiveStart = runStartDate;
+      effectiveEnd = runEndDate;
+    }
+
+    const isIntraday = runInterval !== "1d";
+    const startIso = `${effectiveStart}T${
+      isIntraday ? runStartTime || "09:15" : "00:00:00"
+    }`;
+    const endIso = `${effectiveEnd}T${
+      isIntraday ? runEndTime || "15:30" : "23:59:59"
+    }`;
+
     const params = new URLSearchParams({
       timeframe: runInterval,
-      start: `${runStartDate}T00:00:00`,
-      end: `${runEndDate}T23:59:00`,
-      initial_capital: String(Number(runInitialCapital) || 100000)
+      start: startIso,
+      end: endIso,
+      initial_capital: String(Number(runInitialCapital) || 100000),
+      benchmark: runBenchmark === "none" ? "" : runBenchmark,
+      cost_model: runCostModel,
+      data_source_mode: runDataSourceMode
     });
 
     try {
@@ -623,43 +698,172 @@ export const PortfolioListPage = () => {
       </Paper>
 
       {/* Run Backtest dialog */}
-      <Dialog open={runDialogOpen} onClose={handleCloseRunDialog} maxWidth="sm" fullWidth>
+      <Dialog
+        open={runDialogOpen}
+        onClose={handleCloseRunDialog}
+        maxWidth="sm"
+        fullWidth
+      >
         <form onSubmit={handleSubmitRunDialog}>
           <DialogTitle>Run portfolio backtest</DialogTitle>
-          <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
-            <TextField
-              label="Interval"
-              size="small"
-              select
-              value={runInterval}
-              onChange={(e) => setRunInterval(e.target.value)}
-            >
-              <MenuItem value="1d">1 day</MenuItem>
-              <MenuItem value="1h">1 hour</MenuItem>
-              <MenuItem value="30m">30 minutes</MenuItem>
-            </TextField>
-            <TextField
-              label="Start date"
-              type="date"
-              size="small"
-              value={runStartDate}
-              onChange={(e) => setRunStartDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              label="End date"
-              type="date"
-              size="small"
-              value={runEndDate}
-              onChange={(e) => setRunEndDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              label="Initial capital"
-              size="small"
-              value={runInitialCapital}
-              onChange={(e) => setRunInitialCapital(e.target.value)}
-            />
+          <DialogContent
+            sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}
+          >
+            <Stack spacing={1.5}>
+              <TextField
+                label="Interval"
+                size="small"
+                select
+                value={runInterval}
+                onChange={(e) => setRunInterval(e.target.value)}
+              >
+                <MenuItem value="1d">1 day</MenuItem>
+                <MenuItem value="1h">1 hour</MenuItem>
+                <MenuItem value="30m">30 minutes</MenuItem>
+              </TextField>
+              <TextField
+                label="Date mode"
+                size="small"
+                select
+                value={runDateMode}
+                onChange={(e) =>
+                  setRunDateMode(e.target.value as "relative" | "custom")
+                }
+              >
+                <MenuItem value="relative">Duration (relative)</MenuItem>
+                <MenuItem value="custom">Custom range</MenuItem>
+              </TextField>
+              {runDateMode === "relative" ? (
+                <TextField
+                  label="Duration"
+                  size="small"
+                  select
+                  value={runDuration}
+                  onChange={(e) =>
+                    setRunDuration(
+                      e.target
+                        .value as
+                        | "1d"
+                        | "5d"
+                        | "1m"
+                        | "3m"
+                        | "6m"
+                        | "1y"
+                        | "2y"
+                        | "3y"
+                    )
+                  }
+                  helperText="Run backtest for a recent window."
+                >
+                  <MenuItem value="1d">Last 1 day</MenuItem>
+                  <MenuItem value="5d">Last 5 days</MenuItem>
+                  <MenuItem value="1m">Last 1 month</MenuItem>
+                  <MenuItem value="3m">Last 3 months</MenuItem>
+                  <MenuItem value="6m">Last 6 months</MenuItem>
+                  <MenuItem value="1y">Last 1 year</MenuItem>
+                  <MenuItem value="2y">Last 2 years</MenuItem>
+                  <MenuItem value="3y">Last 3 years</MenuItem>
+                </TextField>
+              ) : (
+                <Stack direction="row" spacing={1.5}>
+                  <TextField
+                    label="Start date"
+                    type="date"
+                    size="small"
+                    value={runStartDate}
+                    onChange={(e) => setRunStartDate(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="End date"
+                    type="date"
+                    size="small"
+                    value={runEndDate}
+                    onChange={(e) => setRunEndDate(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
+                </Stack>
+              )}
+              <Stack direction="row" spacing={1.5}>
+                <TextField
+                  label="Start time"
+                  type="time"
+                  size="small"
+                  value={runStartTime}
+                  onChange={(e) => setRunStartTime(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  disabled={runInterval === "1d"}
+                  fullWidth
+                />
+                <TextField
+                  label="End time"
+                  type="time"
+                  size="small"
+                  value={runEndTime}
+                  onChange={(e) => setRunEndTime(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  disabled={runInterval === "1d"}
+                  fullWidth
+                />
+              </Stack>
+              <TextField
+                label="Initial capital"
+                size="small"
+                value={runInitialCapital}
+                onChange={(e) => setRunInitialCapital(e.target.value)}
+              />
+            </Stack>
+
+            <Accordion sx={{ mt: 1 }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="subtitle2">
+                  Advanced settings
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Stack spacing={1.5}>
+                  <TextField
+                    label="Benchmark"
+                    size="small"
+                    select
+                    value={runBenchmark}
+                    onChange={(e) => setRunBenchmark(e.target.value)}
+                    helperText="Optional benchmark for comparison; backend integration is planned."
+                  >
+                    <MenuItem value="none">(None)</MenuItem>
+                    <MenuItem value="NIFTY50">NIFTY 50</MenuItem>
+                    <MenuItem value="NIFTYNEXT50">NIFTY Next 50</MenuItem>
+                    <MenuItem value="NIFTYMIDCAP100">NIFTY Midcap 100</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Cost model"
+                    size="small"
+                    select
+                    value={runCostModel}
+                    onChange={(e) => setRunCostModel(e.target.value)}
+                  >
+                    <MenuItem value="zerodha_default">
+                      Zerodha default (equity cash)
+                    </MenuItem>
+                    <MenuItem value="no_costs">No costs</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Data source mode"
+                    size="small"
+                    select
+                    value={runDataSourceMode}
+                    onChange={(e) => setRunDataSourceMode(e.target.value)}
+                    helperText="Aligns with single-stock backtest data source behaviour."
+                  >
+                    <MenuItem value="auto">Auto (local cache + broker)</MenuItem>
+                    <MenuItem value="cache_only">Local cache only</MenuItem>
+                    <MenuItem value="broker_only">Broker only</MenuItem>
+                  </TextField>
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
           </DialogContent>
           <DialogActions>
             <Button onClick={handleCloseRunDialog}>Cancel</Button>
