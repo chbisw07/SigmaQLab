@@ -1,4 +1,4 @@
-from datetime import datetime
+import datetime as _dt
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -167,8 +167,8 @@ async def list_portfolio_backtests(
 async def create_portfolio_backtest(
     portfolio_id: int,
     timeframe: str = Query("1d"),
-    start: datetime = Query(...),
-    end: datetime = Query(...),
+    start: _dt.datetime = Query(...),
+    end: _dt.datetime = Query(...),
     initial_capital: float = Query(100_000.0, gt=0),
     meta_db: Session = Depends(get_db),
     prices_db: Session = Depends(get_prices_db),
