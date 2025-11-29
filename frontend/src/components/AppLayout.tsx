@@ -4,6 +4,7 @@ import StorageIcon from "@mui/icons-material/Storage";
 import ListAltIcon from "@mui/icons-material/ListAlt";
 import ScienceIcon from "@mui/icons-material/Science";
 import AssessmentIcon from "@mui/icons-material/Assessment";
+import PieChartIcon from "@mui/icons-material/PieChart";
 import PaletteIcon from "@mui/icons-material/Palette";
 import SettingsIcon from "@mui/icons-material/Settings";
 import {
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { label: "Data", path: "/data", icon: <StorageIcon /> },
   { label: "Stocks", path: "/stocks", icon: <ListAltIcon /> },
   { label: "Strategies", path: "/strategies", icon: <ScienceIcon /> },
+  { label: "Portfolios", path: "/portfolios", icon: <PieChartIcon /> },
   { label: "Backtests", path: "/backtests", icon: <AssessmentIcon /> },
   { label: "Appearance", path: "/appearance", icon: <PaletteIcon /> },
   { label: "Settings", path: "/settings", icon: <SettingsIcon /> }

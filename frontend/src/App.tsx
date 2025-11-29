@@ -13,6 +13,8 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { AppearanceContext } from "./appearanceContext";
 import type { ChartThemeId } from "./chartThemes";
 import { AppearancePage } from "./pages/AppearancePage";
+import { PortfolioListPage } from "./pages/PortfolioListPage";
+import { PortfolioDetailPage } from "./pages/PortfolioDetailPage";
 
 export const App = () => {
   const [appThemeId, setAppThemeId] = useState<AppThemeId>(() => {
@@ -52,6 +54,8 @@ export const App = () => {
             <Route path="/data" element={<DataPage />} />
             <Route path="/stocks" element={<StocksPage />} />
             <Route path="/strategies" element={<StrategiesPage />} />
+            <Route path="/portfolios" element={<PortfolioListPage />} />
+            <Route path="/portfolios/:id" element={<PortfolioDetailPage />} />
             <Route path="/backtests" element={<BacktestsPage />} />
             <Route path="/appearance" element={<AppearancePage />} />
             <Route path="/settings" element={<SettingsPage />} />
