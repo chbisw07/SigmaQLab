@@ -478,12 +478,20 @@ export const PortfolioListPage = () => {
             Define portfolios, run portfolio backtests, and analyse performance.
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          onClick={() => navigate("/portfolios/new")}
-        >
-          New portfolio
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            onClick={() => navigate("/portfolios/compare")}
+          >
+            Compare portfolios
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => navigate("/portfolios/new")}
+          >
+            New portfolio
+          </Button>
+        </Stack>
       </Box>
 
       {/* KPI chips */}
