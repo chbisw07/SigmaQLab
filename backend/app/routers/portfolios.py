@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -5,12 +6,14 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Portfolio, PortfolioBacktest
+from ..prices_database import get_prices_db
 from ..schemas import (
     PortfolioBacktestRead,
     PortfolioCreate,
     PortfolioRead,
     PortfolioUpdate,
 )
+from ..portfolio_service import PortfolioService
 
 router = APIRouter(prefix="/api/portfolios", tags=["Portfolios"])
 
@@ -154,3 +157,36 @@ async def list_portfolio_backtests(
         .all()
     )
     return [PortfolioBacktestRead.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/{portfolio_id}/backtests",
+    response_model=PortfolioBacktestRead,
+    status_code=201,
+)
+async def create_portfolio_backtest(
+    portfolio_id: int,
+    timeframe: str = Query("1d"),
+    start: datetime = Query(...),
+    end: datetime = Query(...),
+    initial_capital: float = Query(100_000.0, gt=0),
+    meta_db: Session = Depends(get_db),
+    prices_db: Session = Depends(get_prices_db),
+) -> PortfolioBacktestRead:
+    """Run a portfolio backtest for the given portfolio.
+
+    V1 runs a long-only, equal-weight allocation across the portfolio's
+    universe, rebalanced on every bar of the chosen timeframe.
+    """
+
+    service = PortfolioService()
+    bt = service.run_portfolio_backtest(
+        meta_db=meta_db,
+        prices_db=prices_db,
+        portfolio_id=portfolio_id,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        initial_capital=initial_capital,
+    )
+    return PortfolioBacktestRead.model_validate(bt)

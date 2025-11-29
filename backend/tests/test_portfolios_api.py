@@ -2,7 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.models import Stock, StockGroup, StockGroupMember
+from app.prices_database import PricesBase, PricesSessionLocal, prices_engine
+from app.prices_models import PriceBar
 
 
 client = TestClient(app)
@@ -20,8 +24,29 @@ def _create_sample_portfolio(code: str = "CORE_EQ") -> dict:
         "notes": "Sample portfolio used in tests.",
     }
     resp = client.post("/api/portfolios", json=payload)
+    if resp.status_code == 201:
+        return resp.json()
+
+    if resp.status_code == 409:
+        # Portfolio with this code already exists; fetch it from the list so
+        # tests remain idempotent across repeated runs.
+        list_resp = client.get("/api/portfolios")
+        assert list_resp.status_code == 200, list_resp.text
+        for item in list_resp.json():
+            if item["code"] == code:
+                return item
+        raise AssertionError(
+            f"Portfolio with code '{code}' exists but could not be fetched",
+        )
+
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+def setup_function() -> None:
+    # Ensure tables exist without wiping user data.
+    Base.metadata.create_all(bind=engine)
+    PricesBase.metadata.create_all(bind=prices_engine)
 
 
 def test_create_and_get_portfolio() -> None:
@@ -102,32 +127,88 @@ def test_portfolio_backtest_read_shape() -> None:
     created = _create_sample_portfolio(code="BT_SHAPE")
     portfolio_id = created["id"]
 
-    # Manually insert a PortfolioBacktest row via the ORM so we can
-    # exercise the read API without having implemented the engine yet.
-    from app.database import SessionLocal
-    from app.models import PortfolioBacktest
+    # Create a minimal stock group with price data so the portfolio
+    # backtest engine has something to work with.
+    meta_session = SessionLocal()
+    prices_session = PricesSessionLocal()
 
-    now = datetime.now(timezone.utc)
-    with SessionLocal() as session:
-        bt = PortfolioBacktest(
-            portfolio_id=portfolio_id,
-            start_date=now - timedelta(days=10),
-            end_date=now,
-            timeframe="1d",
-            initial_capital=100_000.0,
-            status="completed",
-            metrics_json={"dummy": True},
+    stock = meta_session.query(Stock).filter(Stock.symbol == "PF_TEST").first()
+    if stock is None:
+        stock = Stock(
+            symbol="PF_TEST",
+            exchange="NSE",
+            segment="equity",
+            name="Portfolio Test",
         )
-        session.add(bt)
-        session.commit()
+        meta_session.add(stock)
+        meta_session.commit()
+        meta_session.refresh(stock)
 
-    resp = client.get(f"/api/portfolios/{portfolio_id}/backtests")
+    group = meta_session.query(StockGroup).filter(StockGroup.code == "PF_GRP").first()
+    if group is None:
+        group = StockGroup(code="PF_GRP", name="Portfolio Group")
+        meta_session.add(group)
+        meta_session.commit()
+        meta_session.refresh(group)
+
+    existing_member = (
+        meta_session.query(StockGroupMember)
+        .filter(
+            StockGroupMember.group_id == group.id,
+            StockGroupMember.stock_id == stock.id,
+        )
+        .first()
+    )
+    if existing_member is None:
+        member = StockGroupMember(group_id=group.id, stock_id=stock.id)
+        meta_session.add(member)
+        meta_session.commit()
+
+    # Update portfolio to reference this group.
+    resp = client.put(
+        f"/api/portfolios/{portfolio_id}",
+        json={"universe_scope": f"group:{group.id}"},
+    )
     assert resp.status_code == 200
-    items = resp.json()
-    assert len(items) == 1
-    item = items[0]
-    assert item["portfolio_id"] == portfolio_id
-    assert item["timeframe"] == "1d"
-    assert item["initial_capital"] == 100_000.0
-    assert item["status"] == "completed"
-    assert item["metrics"]["dummy"] is True
+
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    idx = [start + timedelta(days=i) for i in range(5)]
+    for i, ts in enumerate(idx):
+        prices_session.add(
+            PriceBar(
+                symbol="PF_TEST",
+                exchange="NSE",
+                timeframe="1d",
+                timestamp=ts,
+                open=100 + i,
+                high=101 + i,
+                low=99 + i,
+                close=100 + i,
+                volume=1000,
+                source="synthetic",
+            )
+        )
+    prices_session.commit()
+
+    # Run a portfolio backtest via the API.
+    resp = client.post(
+        f"/api/portfolios/{portfolio_id}/backtests",
+        params={
+            "timeframe": "1d",
+            "start": idx[0].isoformat(),
+            "end": idx[-1].isoformat(),
+            "initial_capital": 100_000.0,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    bt = resp.json()
+    assert bt["portfolio_id"] == portfolio_id
+    assert bt["timeframe"] == "1d"
+    assert bt["initial_capital"] == 100_000.0
+    assert bt["status"] == "completed"
+    assert "metrics" in bt
+    assert "final_value" in bt["metrics"]
+    assert "equity_curve" in bt["metrics"]
+
+    meta_session.close()
+    prices_session.close()
