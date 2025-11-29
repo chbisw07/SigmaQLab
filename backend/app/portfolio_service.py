@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from statistics import mean
 from typing import Dict, List, Sequence
 
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from .backtest_engine import EquityPoint
 from .backtest_service import BacktestService
 from .data_manager import DataManager
 from .models import Portfolio, PortfolioBacktest, Stock, StockGroup, StockGroupMember
@@ -105,7 +107,12 @@ class PortfolioService:
             msg = "No common timeline across portfolio symbols for requested window"
             raise ValueError(msg)
 
-        equity_curve = self._simulate_equal_weight_portfolio(
+        (
+            equity_curve,
+            utilisation_history,
+            final_holdings,
+            final_prices,
+        ) = self._simulate_equal_weight_portfolio(
             symbols=symbols,
             price_data=price_data,
             timeline=timeline,
@@ -116,7 +123,19 @@ class PortfolioService:
         final_equity = equity_curve[-1].equity if equity_curve else initial_capital
         pnl = final_equity - initial_capital
 
-        metrics = {
+        # Reuse the existing equity-metrics helper so portfolio metrics are
+        # consistent with single-strategy backtests.
+        equity_points = [
+            EquityPoint(timestamp=pt.timestamp, equity=pt.equity) for pt in equity_curve
+        ]
+        equity_metrics: Dict[str, float] = {}
+        if equity_points:
+            equity_metrics = self._backtest_service._compute_equity_metrics(  # type: ignore[attr-defined]
+                equity_points,
+                timeframe=timeframe,
+            )
+
+        metrics: Dict[str, object] = {
             "initial_capital": float(initial_capital),
             "final_value": float(final_equity),
             "pnl": float(pnl),
@@ -125,7 +144,32 @@ class PortfolioService:
                 for pt in equity_curve
             ],
             "universe_symbols": symbols,
+            # In this v1 engine there are no explicit trades, so all PnL is
+            # unrealised mark-to-market from the holdings.
+            "pnl_realised": 0.0,
+            "pnl_unrealised": float(pnl),
+            "pnl_what_if": float(pnl),
         }
+
+        metrics.update(equity_metrics)
+
+        if utilisation_history:
+            metrics["avg_capital_utilisation"] = float(mean(utilisation_history))
+            metrics["max_capital_utilisation"] = float(max(utilisation_history))
+
+        # Simple per-symbol contribution based on final holding value versus
+        # an equal-split allocation of initial capital.
+        if final_holdings and final_prices:
+            per_symbol: Dict[str, Dict[str, float]] = {}
+            per_name_initial = initial_capital / float(len(final_holdings))
+            for sym, shares in final_holdings.items():
+                price = final_prices.get(sym, 0.0)
+                final_val = float(shares) * float(price)
+                per_symbol[sym] = {
+                    "final_value": final_val,
+                    "pnl": final_val - per_name_initial,
+                }
+            metrics["per_symbol"] = per_symbol
 
         bt = PortfolioBacktest(
             portfolio_id=portfolio.id,
@@ -218,14 +262,21 @@ class PortfolioService:
         timeline: List[datetime],
         initial_capital: float,
         risk_profile: Dict[str, object],
-    ) -> List[PortfolioEquityPoint]:
-        """Long-only, equal-weight portfolio simulation.
+    ) -> tuple[
+        List[PortfolioEquityPoint],
+        List[float],
+        Dict[str, float],
+        Dict[str, float],
+    ]:
+        """Long-only, equal-weight portfolio simulation with basic diagnostics.
 
         - At each timestamp on the common timeline we:
           - Mark to market existing holdings.
           - Compute equal-weight target weights across the active universe,
             respecting maxPositionSizePct and maxConcurrentPositions.
           - Compute trade sizes needed to reach those weights.
+        - Returns equity curve, capital-utilisation history, final holdings,
+          and final prices for contribution analysis.
         """
 
         max_pos_pct = float(risk_profile.get("maxPositionSizePct", 100.0))
@@ -237,6 +288,7 @@ class PortfolioService:
         cash = float(initial_capital)
 
         equity_curve: List[PortfolioEquityPoint] = []
+        utilisation_history: List[float] = []
 
         for ts in timeline:
             prices: Dict[str, float] = {}
@@ -275,6 +327,7 @@ class PortfolioService:
                 equity_curve.append(
                     PortfolioEquityPoint(timestamp=ts, equity=total_equity)
                 )
+                utilisation_history.append(0.0)
                 continue
 
             base_weight = 1.0 / float(len(active_symbols))
@@ -302,7 +355,8 @@ class PortfolioService:
                     continue
 
                 delta_notional = desired_notional.get(sym, 0.0) - current_notional.get(
-                    sym, 0.0
+                    sym,
+                    0.0,
                 )
                 # Convert notional delta into integer shares.
                 delta_shares = int(delta_notional // price)
@@ -328,4 +382,24 @@ class PortfolioService:
             total_equity = cash + sum(holdings[sym] * prices[sym] for sym in symbols)
             equity_curve.append(PortfolioEquityPoint(timestamp=ts, equity=total_equity))
 
-        return equity_curve
+            invested_notional = sum(holdings[sym] * prices[sym] for sym in symbols)
+            utilisation = (
+                invested_notional / total_equity if total_equity > 0.0 else 0.0
+            )
+            utilisation_history.append(utilisation)
+
+        # Snapshot of final prices for contribution calculations.
+        final_prices: Dict[str, float] = {}
+        if timeline:
+            last_ts = timeline[-1]
+            for sym in symbols:
+                df = price_data[sym]
+                if last_ts in df.index:
+                    row = df.loc[last_ts]
+                    if hasattr(row, "iloc") and not hasattr(row, "dtype"):
+                        price = float(row["close"].iloc[-1])
+                    else:
+                        price = float(row["close"])
+                    final_prices[sym] = price
+
+        return equity_curve, utilisation_history, holdings, final_prices
