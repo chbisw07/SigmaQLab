@@ -32,7 +32,8 @@ import {
   YAxis
 } from "recharts";
 import { useEffect, useMemo, useState, FormEvent, SyntheticEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 
 type FetchState = "idle" | "loading" | "success" | "error";
 
@@ -135,10 +136,12 @@ const formatUniverseLabel = (
 
 export const PortfolioDetailPage = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const isNew = id === "new";
 
   const [tab, setTab] = useState<
     "overview" | "settings" | "backtests" | "trades" | "analytics"
-  >("overview");
+  >(isNew ? "settings" : "overview");
 
   const [portfolio, setPortfolio] = useState<PortfolioDto | null>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -192,17 +195,50 @@ export const PortfolioDetailPage = () => {
     const load = async () => {
       setLoadState("loading");
       try {
-        const [pfRes, stratRes, grpRes, btRes] = await Promise.all([
-          fetch(`${API_BASE}/api/portfolios/${id}`),
+        const [stratRes, grpRes] = await Promise.all([
           fetch(`${API_BASE}/api/strategies`),
-          fetch(`${API_BASE}/api/stock-groups`),
+          fetch(`${API_BASE}/api/stock-groups`)
+        ]);
+
+        if (stratRes.ok) {
+          const sData: Strategy[] = await stratRes.json();
+          setStrategies(sData);
+        }
+        if (grpRes.ok) {
+          const gData: StockGroup[] = await grpRes.json();
+          setGroups(gData);
+        }
+
+        if (isNew) {
+          // New portfolio: use defaults and skip backend load.
+          setPortfolio(null);
+          setName("");
+          setBaseCurrency("INR");
+          setUniverseScope("");
+          setAllowedStrategyIds([]);
+          setMaxPosPct("20");
+          setMaxPositions("10");
+          setDdTolerance("0");
+          setProductType("delivery");
+          setBacktests([]);
+          setSelectedBacktestId(null);
+          setSelectedBacktest(null);
+          setBacktestsState("idle");
+          setLoadState("success");
+          return;
+        }
+
+        const [pfRes, btRes] = await Promise.all([
+          fetch(`${API_BASE}/api/portfolios/${id}`),
           fetch(`${API_BASE}/api/portfolios/${id}/backtests`)
         ]);
 
         if (!pfRes.ok) {
           setLoadState("error");
+          setBacktestsState("error");
           return;
         }
+
         const pfData: PortfolioDto = await pfRes.json();
         setPortfolio(pfData);
         setName(pfData.name);
@@ -239,15 +275,6 @@ export const PortfolioDetailPage = () => {
           setProductType("delivery");
         }
 
-        if (stratRes.ok) {
-          const sData: Strategy[] = await stratRes.json();
-          setStrategies(sData);
-        }
-        if (grpRes.ok) {
-          const gData: StockGroup[] = await grpRes.json();
-          setGroups(gData);
-        }
-
         if (btRes.ok) {
           const btData: PortfolioBacktest[] = await btRes.json();
           setBacktests(btData);
@@ -269,7 +296,7 @@ export const PortfolioDetailPage = () => {
       }
     };
     void load();
-  }, [id]);
+  }, [id, isNew]);
 
   const handleTabChange = (
     _event: SyntheticEvent,
@@ -300,7 +327,6 @@ export const PortfolioDetailPage = () => {
 
   const handleSaveSettings = async (event: FormEvent) => {
     event.preventDefault();
-    if (!portfolio) return;
     if (!name.trim()) {
       setSettingsState("error");
       setSettingsMessage("Name is required.");
@@ -324,7 +350,7 @@ export const PortfolioDetailPage = () => {
     }
     risk_profile.productType = productType;
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       name: name.trim(),
       base_currency: baseCurrency || "INR",
       universe_scope: universeScope || null,
@@ -333,11 +359,32 @@ export const PortfolioDetailPage = () => {
     };
 
     try {
-      const res = await fetch(`${API_BASE}/api/portfolios/${portfolio.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+      let res: Response;
+      if (isNew) {
+        // Creating a new portfolio; generate a simple code from the name.
+        const generatedCode =
+          name
+            .trim()
+            .toUpperCase()
+            .replace(/\s+/g, "_")
+            .slice(0, 12) || "PORTFOLIO";
+        payload.code = generatedCode;
+        res = await fetch(`${API_BASE}/api/portfolios`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      } else if (portfolio) {
+        res = await fetch(`${API_BASE}/api/portfolios/${portfolio.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        setSettingsState("error");
+        setSettingsMessage("Missing portfolio context.");
+        return;
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         setSettingsState("error");
@@ -350,9 +397,14 @@ export const PortfolioDetailPage = () => {
       const updated: PortfolioDto = await res.json();
       setPortfolio(updated);
       setSettingsState("success");
-      setSettingsMessage("Settings saved.");
+      setSettingsMessage(isNew ? "Portfolio created." : "Settings saved.");
       setSnackbarSeverity("success");
-      setSnackbarMessage("Portfolio settings updated.");
+      setSnackbarMessage(
+        isNew ? "Portfolio created." : "Portfolio settings updated."
+      );
+      if (isNew) {
+        navigate(`/portfolios/${updated.id}`);
+      }
     } catch (error) {
       setSettingsState("error");
       setSettingsMessage(
@@ -568,7 +620,7 @@ export const PortfolioDetailPage = () => {
     );
   }
 
-  if (loadState === "error" && !portfolio) {
+  if (loadState === "error" && !portfolio && !isNew) {
     return (
       <Box sx={{ p: 3 }}>
         <Typography variant="h6" color="error">
@@ -579,7 +631,7 @@ export const PortfolioDetailPage = () => {
   }
 
   const universeLabel = formatUniverseLabel(
-    portfolio?.universe_scope ?? null,
+    portfolio?.universe_scope ?? universeScope ?? null,
     groups
   );
 
@@ -1253,14 +1305,23 @@ export const PortfolioDetailPage = () => {
           mb: 1
         }}
       >
-        <Box>
-          <Typography variant="h5" gutterBottom>
-            {portfolio?.name ?? "Portfolio"}{" "}
-            {portfolio ? `(${portfolio.code})` : ""}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {universeLabel || "No universe selected yet."}
-          </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Button
+            size="small"
+            startIcon={<ArrowBackIcon />}
+            onClick={() => navigate("/portfolios")}
+          >
+            Portfolios
+          </Button>
+          <Box>
+            <Typography variant="h6">
+              {isNew ? "New portfolio" : portfolio?.name ?? "Portfolio"}
+              {!isNew && portfolio ? ` (${portfolio.code})` : ""}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {universeLabel || "No universe selected yet."}
+            </Typography>
+          </Box>
         </Box>
         <Stack direction="row" spacing={1}>
           {allowedStrategyNames.map((name) => (
