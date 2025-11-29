@@ -217,3 +217,60 @@ class StockGroupMember(Base):
 
     group = relationship("StockGroup", back_populates="members")
     stock = relationship("Stock", back_populates="group_memberships")
+
+
+class Portfolio(Base):
+    """High-level portfolio definition built on top of the stock universe."""
+
+    __tablename__ = "portfolios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    base_currency = Column(String, nullable=False, default="INR")
+    # Universe scoping, e.g. 'group:1' or 'universe:custom'.
+    universe_scope = Column(String, nullable=True)
+    # Optional list of allowed strategy IDs or codes.
+    allowed_strategies_json = Column(JSON, nullable=True)
+    # Snapshot of risk profile configuration for this portfolio.
+    risk_profile_json = Column(JSON, nullable=True)
+    # Snapshot of rebalancing policy (frequency, triggers, etc.).
+    rebalance_policy_json = Column(JSON, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class PortfolioBacktest(Base):
+    """Portfolio-level backtest driven by a Portfolio definition."""
+
+    __tablename__ = "portfolio_backtests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+    timeframe = Column(String, nullable=False)
+    initial_capital = Column(Float, nullable=False)
+    # Snapshot of the portfolio configuration and risk profile used.
+    config_snapshot_json = Column(JSON, nullable=True)
+    risk_profile_snapshot_json = Column(JSON, nullable=True)
+    status = Column(String, nullable=False, default="pending")
+    metrics_json = Column(JSON, nullable=True)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    finished_at = Column(DateTime, nullable=True)
+
+    portfolio = relationship("Portfolio", backref="backtests")

@@ -493,3 +493,104 @@ class BacktestChartDataResponse(BaseModel):
     equity_curve: list[BacktestEquityPointRead]
     projection_curve: list[BacktestEquityPointRead]
     trades: list[BacktestTradeRead]
+
+
+# -------------------------
+# Portfolio management schemas
+# -------------------------
+
+
+class PortfolioBase(BaseModel):
+    """Common fields for Portfolio models."""
+
+    code: str = Field(
+        ...,
+        description="Short identifier for the portfolio, e.g. CORE_EQUITY",
+    )
+    name: str = Field(..., description="Human-friendly portfolio name")
+    base_currency: str = Field(
+        "INR",
+        description="Base currency for the portfolio (e.g. INR, USD).",
+    )
+    universe_scope: str | None = Field(
+        default=None,
+        description="Universe scoping string, e.g. 'group:1' or 'universe:custom'.",
+    )
+    allowed_strategies: list[int] | list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional list of allowed strategy identifiers for this portfolio. "
+            "May be strategy_ids or codes."
+        ),
+    )
+    risk_profile: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional risk profile configuration blob.",
+    )
+    rebalance_policy: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional rebalance policy configuration blob.",
+    )
+    notes: str | None = None
+
+
+class PortfolioCreate(PortfolioBase):
+    """Payload to create a new Portfolio."""
+
+    pass
+
+
+class PortfolioUpdate(BaseModel):
+    """Partial update payload for a Portfolio."""
+
+    code: str | None = None
+    name: str | None = None
+    base_currency: str | None = None
+    universe_scope: str | None = None
+    allowed_strategies: list[int] | list[str] | None = None
+    risk_profile: dict[str, Any] | None = None
+    rebalance_policy: dict[str, Any] | None = None
+    notes: str | None = None
+
+
+class PortfolioRead(PortfolioBase):
+    """Portfolio representation returned by the API."""
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    # Map ORM JSON columns to logical fields.
+    allowed_strategies: list[int] | list[str] | None = Field(
+        default=None,
+        validation_alias="allowed_strategies_json",
+    )
+    risk_profile: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias="risk_profile_json",
+    )
+    rebalance_policy: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias="rebalance_policy_json",
+    )
+
+    model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class PortfolioBacktestRead(BaseModel):
+    """Portfolio-level backtest record."""
+
+    id: int
+    portfolio_id: int
+    start_date: datetime
+    end_date: datetime
+    timeframe: str
+    initial_capital: float
+    status: str
+    metrics: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias="metrics_json",
+    )
+    created_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
