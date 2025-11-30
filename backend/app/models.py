@@ -161,6 +161,8 @@ class Stock(Base):
     symbol = Column(String, nullable=False, index=True)
     exchange = Column(String, nullable=False, index=True)
     segment = Column(String, nullable=True)
+    # Optional market capitalisation expressed in INR crores.
+    market_cap_crore = Column(Float, nullable=True)
     name = Column(String, nullable=True)
     sector = Column(String, nullable=True)
     tags = Column(JSON, nullable=True)

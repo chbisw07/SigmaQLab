@@ -222,6 +222,10 @@ class StockBase(BaseModel):
         default=None,
         description="Human-friendly instrument name, e.g. HDFC Bank Ltd.",
     )
+    market_cap_crore: float | None = Field(
+        default=None,
+        description="Optional market capitalisation expressed in INR crores.",
+    )
     sector: str | None = Field(default=None, description="Sector/industry label")
     tags: list[str] | None = Field(
         default=None,
@@ -246,6 +250,7 @@ class StockUpdate(BaseModel):
     exchange: str | None = None
     segment: str | None = None
     name: str | None = None
+    market_cap_crore: float | None = None
     sector: str | None = None
     tags: list[str] | None = None
     is_active: bool | None = None

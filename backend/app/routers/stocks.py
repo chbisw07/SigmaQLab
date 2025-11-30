@@ -201,6 +201,8 @@ async def update_stock(
         stock.name = update_data["name"]
     if "sector" in update_data:
         stock.sector = update_data["sector"]
+    if "market_cap_crore" in update_data:
+        stock.market_cap_crore = update_data["market_cap_crore"]
     if "tags" in update_data:
         stock.tags = update_data["tags"]
     if "is_active" in update_data and update_data["is_active"] is not None:
@@ -746,6 +748,7 @@ async def import_tradingview_screener(
                 symbol=resolved.symbol,
                 exchange=resolved.exchange,
                 segment=segment_value,
+                market_cap_crore=market_cap_crore,
                 name=None,
                 sector=sector_value,
                 tags=None,
@@ -760,6 +763,8 @@ async def import_tradingview_screener(
             segment_value = _classify_segment_from_market_cap(market_cap_crore)
             if segment_value is not None:
                 stock.segment = segment_value
+            if market_cap_crore is not None:
+                stock.market_cap_crore = market_cap_crore
             if sector_value is not None:
                 stock.sector = sector_value
             if mark_active and not stock.is_active:
@@ -920,6 +925,7 @@ async def import_portfolio_csv(
                 symbol=resolved.symbol,
                 exchange=resolved.exchange,
                 segment=segment_value,
+                market_cap_crore=market_cap_crore,
                 name=None,
                 sector=sector_value,
                 tags=None,
@@ -936,6 +942,8 @@ async def import_portfolio_csv(
                 stock.segment = segment_value
             if sector_value is not None:
                 stock.sector = sector_value
+            if market_cap_crore is not None:
+                stock.market_cap_crore = market_cap_crore
             if mark_active and not stock.is_active:
                 stock.is_active = True
                 db.add(stock)

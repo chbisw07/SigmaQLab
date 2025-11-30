@@ -36,6 +36,7 @@ type Stock = {
   exchange: string;
   segment?: string | null;
   name?: string | null;
+  market_cap_crore?: number | null;
   sector?: string | null;
   tags?: string[] | null;
   is_active: boolean;
@@ -87,6 +88,7 @@ export const StocksPage = () => {
   const [stockFormExchange, setStockFormExchange] = useState("NSE");
   const [stockFormSegment, setStockFormSegment] = useState("");
   const [stockFormName, setStockFormName] = useState("");
+  const [stockFormMarketCap, setStockFormMarketCap] = useState("");
   const [stockFormSector, setStockFormSector] = useState("");
   const [stockFormTags, setStockFormTags] = useState("");
   const [stockFormActive, setStockFormActive] = useState(true);
@@ -214,6 +216,7 @@ export const StocksPage = () => {
     setStockFormExchange("NSE");
     setStockFormSegment("");
     setStockFormName("");
+    setStockFormMarketCap("");
     setStockFormSector("");
     setStockFormTags("");
     setStockFormActive(true);
@@ -227,6 +230,9 @@ export const StocksPage = () => {
     setStockFormExchange(stock.exchange);
     setStockFormSegment(stock.segment ?? "");
     setStockFormName(stock.name ?? "");
+    setStockFormMarketCap(
+      stock.market_cap_crore != null ? String(stock.market_cap_crore) : ""
+    );
     setStockFormSector(stock.sector ?? "");
     setStockFormTags((stock.tags ?? []).join(", "));
     setStockFormActive(stock.is_active);
@@ -239,11 +245,20 @@ export const StocksPage = () => {
     setStockFormState("loading");
     setStockFormMessage(null);
 
+    const marketCapClean = stockFormMarketCap.trim();
+    const marketCapValue =
+      marketCapClean.length === 0
+        ? null
+        : Number.isNaN(Number.parseFloat(marketCapClean))
+          ? null
+          : Number.parseFloat(marketCapClean);
+
     const payload = {
       symbol: stockFormSymbol.trim().toUpperCase(),
       exchange: stockFormExchange.trim().toUpperCase() || "NSE",
       segment: stockFormSegment.trim() || null,
       name: stockFormName.trim() || null,
+      market_cap_crore: marketCapValue,
       sector: stockFormSector.trim() || null,
       tags:
         stockFormTags.trim().length === 0
@@ -499,37 +514,51 @@ export const StocksPage = () => {
       width: 100
     },
     {
+      field: "market_cap_crore",
+      headerName: "Mkt. cap (₹ cr)",
+      width: 140,
+      renderCell: (params) => {
+        const row = params.row as Stock | undefined;
+        const value = row?.market_cap_crore;
+        if (value == null || Number.isNaN(value)) return "";
+        // show with one decimal place
+        return value.toLocaleString("en-IN", {
+          maximumFractionDigits: 1,
+          minimumFractionDigits: 0
+        });
+      }
+    },
+    {
       field: "segment",
       headerName: "Segment",
-      width: 130,
-      valueGetter: (params) => params?.row?.segment ?? ""
+      width: 130
     },
     {
       field: "name",
       headerName: "Name",
       flex: 1.5,
-      minWidth: 160,
-      valueGetter: (params) => params?.row?.name ?? ""
+      minWidth: 160
     },
     {
       field: "sector",
       headerName: "Sector",
       flex: 1,
-      minWidth: 140,
-      valueGetter: (params) => params?.row?.sector ?? ""
+      minWidth: 140
     },
     {
       field: "tags",
       headerName: "Tags",
       flex: 1,
-      minWidth: 160,
-      valueGetter: (params) => (params?.row?.tags ?? []).join(", ")
+      minWidth: 160
     },
     {
       field: "is_active",
       headerName: "Active",
       width: 90,
-      valueFormatter: (params) => (params.value ? "Yes" : "No")
+      renderCell: (params) => {
+        const row = params.row as Stock | undefined;
+        return row && row.is_active ? "Yes" : "No";
+      }
     },
     {
       field: "actions",
@@ -1126,6 +1155,14 @@ export const StocksPage = () => {
               value={stockFormSegment}
               onChange={(e) => setStockFormSegment(e.target.value)}
               helperText="Optional, e.g. equity, fno"
+            />
+            <TextField
+              fullWidth
+              label="Market cap (₹ cr)"
+              type="number"
+              value={stockFormMarketCap}
+              onChange={(e) => setStockFormMarketCap(e.target.value)}
+              helperText="Optional market capitalisation in INR crores"
             />
             <TextField
               fullWidth
@@ -1920,15 +1957,13 @@ export const StocksPage = () => {
                         field: "sector",
                         headerName: "Sector",
                         flex: 1,
-                        minWidth: 140,
-                        valueGetter: (params) => params?.row?.sector ?? ""
+                        minWidth: 140
                       },
                       {
                         field: "name",
                         headerName: "Name",
                         flex: 1.5,
-                        minWidth: 180,
-                        valueGetter: (params) => params?.row?.name ?? ""
+                        minWidth: 180
                       }
                     ]}
                     density="compact"

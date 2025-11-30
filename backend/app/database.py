@@ -93,3 +93,13 @@ def ensure_meta_schema_migrations() -> None:
                         text(f"ALTER TABLE backtest_trades ADD COLUMN {name} {ddl}")
                     )
                 conn.commit()
+
+    # Stocks: optional market cap in INR crores.
+    if "stocks" in tables:
+        columns = {col["name"] for col in inspector.get_columns("stocks")}
+        if "market_cap_crore" not in columns:
+            with engine.connect() as conn:
+                conn.execute(
+                    text("ALTER TABLE stocks ADD COLUMN market_cap_crore FLOAT")
+                )
+                conn.commit()
