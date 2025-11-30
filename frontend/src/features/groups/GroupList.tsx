@@ -77,10 +77,12 @@ export const GroupList = ({
             rowSelectionModel={activeGroupCode ? [activeGroupCode] : []}
             onRowSelectionModelChange={(model) => {
               const nextCode = model[0] as string | undefined;
-              if (nextCode) {
-                onSelectGroup(nextCode);
-              } else {
-                onSelectGroup(null);
+              onSelectGroup(nextCode ?? null);
+            }}
+            onRowClick={(params) => {
+              const code = params.row?.code;
+              if (typeof code === "string") {
+                onSelectGroup(code);
               }
             }}
             sx={{

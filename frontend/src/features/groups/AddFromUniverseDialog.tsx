@@ -4,6 +4,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  TextField,
   Typography
 } from "@mui/material";
 import { DataGrid, type GridColDef, type GridRowSelectionModel } from "@mui/x-data-grid";
@@ -33,8 +34,22 @@ export const AddFromUniverseDialog = ({
   const [selection, setSelection] = useState<GridRowSelectionModel>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
-  const rows = useMemo(() => availableStocks, [availableStocks]);
+  const rows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return availableStocks;
+    return availableStocks.filter((stock) => {
+      const symbol = stock.symbol.toLowerCase();
+      const name = (stock.name ?? "").toLowerCase();
+      const sector = (stock.sector ?? "").toLowerCase();
+      return (
+        symbol.includes(query) ||
+        name.includes(query) ||
+        sector.includes(query)
+      );
+    });
+  }, [availableStocks, search]);
 
   const handleAdd = async () => {
     if (selection.length === 0) {
@@ -64,7 +79,16 @@ export const AddFromUniverseDialog = ({
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
       <DialogTitle>Add from universe</DialogTitle>
-      <DialogContent sx={{ mt: 1 }}>
+      <DialogContent sx={{ mt: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+        <TextField
+          size="small"
+          label="Search symbol, name, or sector"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setSelection([]);
+          }}
+        />
         {rows.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
             No eligible universe stocks available.

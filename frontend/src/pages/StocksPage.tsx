@@ -172,6 +172,18 @@ export const StocksPage = () => {
     navigate(`/stocks?${params.toString()}`);
   };
 
+  const handleGroupSelectionChange = (code: string | null) => {
+    setActiveGroupCode(code);
+    const params = new URLSearchParams(location.search);
+    params.set("tab", "groups");
+    if (code) {
+      params.set("group", code);
+    } else {
+      params.delete("group");
+    }
+    navigate(`/stocks?${params.toString()}`);
+  };
+
   const resetStockForm = () => {
     setSelectedStockId(null);
     setStockFormSymbol("");
@@ -1047,14 +1059,3 @@ export const StocksPage = () => {
     </Box>
   );
 };
-  const handleGroupSelectionChange = (code: string | null) => {
-    setActiveGroupCode(code);
-    const params = new URLSearchParams(location.search);
-    params.set("tab", "groups");
-    if (code) {
-      params.set("group", code);
-    } else {
-      params.delete("group");
-    }
-    navigate(`/stocks?${params.toString()}`);
-  };

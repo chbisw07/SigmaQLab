@@ -151,8 +151,8 @@ export const GroupDetailPanel = ({
     }
   };
 
-  const refreshDetail = async () => {
-    if (!group) return;
+  const refreshDetail = async (): Promise<StockGroupDetail | null> => {
+    if (!group) return null;
     try {
       const res = await fetch(`${apiBase}/api/stock-groups/${group.id}`);
       if (!res.ok) throw new Error("Failed to reload group.");
@@ -164,11 +164,13 @@ export const GroupDetailPanel = ({
           : ""
       );
       onGroupUpdated();
+      return data;
     } catch (err) {
       setActionMessage({
         type: "error",
         text: err instanceof Error ? err.message : "Unable to refresh group."
       });
+      return null;
     }
   };
 
@@ -201,10 +203,14 @@ export const GroupDetailPanel = ({
     }
   };
 
-  const handleEqualise = async () => {
+  const handleEqualise = async (symbolsOverride?: string[]) => {
     if (!detail) return;
     try {
-      const symbols = detail.members.map((member) => member.symbol);
+      const symbols =
+        symbolsOverride && symbolsOverride.length > 0
+          ? symbolsOverride
+          : detail.members.map((member) => member.symbol);
+      if (symbols.length === 0) return;
       const res = await fetch(
         `${apiBase}/api/stock-groups/${detail.code}/members/bulk-add`,
         {
@@ -279,11 +285,9 @@ export const GroupDetailPanel = ({
           "Failed to add the selected stocks."
       );
     }
-    await refreshDetail();
-    setActionMessage({
-      type: "success",
-      text: `${symbols.length} stock(s) added to the group.`
-    });
+    const existingSymbols = detail.members.map((member) => member.symbol);
+    const combined = Array.from(new Set([...existingSymbols, ...symbols]));
+    await handleEqualise(combined);
   };
 
   const handleImportCsv = async (file: File) => {
