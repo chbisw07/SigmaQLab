@@ -29,6 +29,7 @@ import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { BacktestDetailChart } from "../features/backtests/components/BacktestDetailChart";
 import { useAppearance } from "../appearanceContext";
+import type { StockGroupSummary } from "../types/stocks";
 
 type Strategy = {
   id: number;
@@ -247,18 +248,17 @@ export const BacktestsPage = () => {
   const [useExistingCoverage, setUseExistingCoverage] = useState(false);
   const [selectedCoverageId, setSelectedCoverageId] = useState<string>("");
 
-  type StockGroup = {
-    id: number;
-    code: string;
-    name: string;
-    description?: string | null;
-    tags?: string[] | null;
-    stock_count: number;
-  };
-
-  const [stockGroups, setStockGroups] = useState<StockGroup[]>([]);
+  const [stockGroups, setStockGroups] = useState<StockGroupSummary[]>([]);
   const [targetMode, setTargetMode] = useState<"single" | "group">("single");
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+  const selectedGroup = selectedGroupId
+    ? stockGroups.find((g) => g.id === selectedGroupId) ?? null
+    : null;
+
+  const formatGroupLabel = (group: StockGroupSummary) =>
+    `${group.code} – ${group.name} (${group.composition_mode ?? "weights"}, ${
+      group.stock_count
+    } stocks)`;
 
   const [visualSettings, setVisualSettings] = useState<VisualConfig>({
     showTradeMarkers: true,
@@ -388,7 +388,7 @@ export const BacktestsPage = () => {
         }
 
         if (groupsRes.ok) {
-          const groupsData: StockGroup[] = await groupsRes.json();
+          const groupsData: StockGroupSummary[] = await groupsRes.json();
           setStockGroups(groupsData);
           if (groupsData.length > 0 && selectedGroupId === null) {
             setSelectedGroupId(groupsData[0].id);
@@ -1304,7 +1304,7 @@ export const BacktestsPage = () => {
                         select
                         fullWidth
                         margin="normal"
-                        label="Stock group"
+                        label="Stock group (basket)"
                         helperText="Select a stock group to run the strategy on."
                         value={selectedGroupId ?? ""}
                         onChange={(e) =>
@@ -1320,10 +1320,25 @@ export const BacktestsPage = () => {
                         </MenuItem>
                         {stockGroups.map((g) => (
                           <MenuItem key={g.id} value={g.id}>
-                            {g.code} – {g.name}
+                            {formatGroupLabel(g)}
                           </MenuItem>
                         ))}
                       </TextField>
+                      {selectedGroup && (
+                        <Button
+                          size="small"
+                          startIcon={<OpenInNewIcon fontSize="small" />}
+                          onClick={() =>
+                            window.open(
+                              `/stocks?tab=groups&group=${selectedGroup.code}`,
+                              "_blank"
+                            )
+                          }
+                          sx={{ mt: -1 }}
+                        >
+                          View group
+                        </Button>
+                      )}
                       <TextField
                         select
                         fullWidth

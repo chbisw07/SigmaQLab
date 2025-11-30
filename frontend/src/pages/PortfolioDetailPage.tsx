@@ -34,6 +34,8 @@ import {
 import { useEffect, useMemo, useState, FormEvent, SyntheticEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import type { StockGroupSummary } from "../types/stocks";
 
 type FetchState = "idle" | "loading" | "success" | "error";
 
@@ -54,13 +56,6 @@ type PortfolioDto = {
 type Strategy = {
   id: number;
   name: string;
-};
-
-type StockGroup = {
-  id: number;
-  code: string;
-  name: string;
-  stock_count: number;
 };
 
 type PortfolioBacktest = {
@@ -121,14 +116,16 @@ const formatDateTime = (iso: string) => {
 
 const formatUniverseLabel = (
   scope: string | null,
-  groups: StockGroup[]
+  groups: StockGroupSummary[]
 ): string => {
   if (!scope) return "";
   if (scope.startsWith("group:")) {
     const id = Number(scope.split(":")[1] ?? "");
     const group = groups.find((g) => g.id === id);
     if (group) {
-      return `${group.code} – ${group.name} (${group.stock_count} stocks)`;
+      return `${group.code} – ${group.name} (${group.composition_mode ?? "weights"}, ${
+        group.stock_count
+      } stocks)`;
     }
   }
   return scope;
@@ -145,7 +142,7 @@ export const PortfolioDetailPage = () => {
 
   const [portfolio, setPortfolio] = useState<PortfolioDto | null>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [groups, setGroups] = useState<StockGroup[]>([]);
+  const [groups, setGroups] = useState<StockGroupSummary[]>([]);
   const [loadState, setLoadState] = useState<FetchState>("idle");
 
   const [backtests, setBacktests] = useState<PortfolioBacktest[]>([]);
@@ -188,6 +185,13 @@ export const PortfolioDetailPage = () => {
   const [snackbarSeverity, setSnackbarSeverity] = useState<
     "success" | "error" | "info"
   >("info");
+
+  const selectedUniverseGroup = useMemo(() => {
+    if (!universeScope || !universeScope.startsWith("group:")) return null;
+    const id = Number(universeScope.split(":")[1] ?? "");
+    if (Number.isNaN(id)) return null;
+    return groups.find((g) => g.id === id) ?? null;
+  }, [universeScope, groups]);
 
   useEffect(() => {
     if (!id) return;
@@ -848,10 +852,26 @@ export const PortfolioDetailPage = () => {
                   <MenuItem value="">(none)</MenuItem>
                   {groups.map((g) => (
                     <MenuItem key={g.id} value={`group:${g.id}`}>
-                      {g.code} – {g.name} ({g.stock_count} stocks)
+                      {g.code} – {g.name} ({g.composition_mode ?? "weights"},{" "}
+                      {g.stock_count} stocks)
                     </MenuItem>
                   ))}
                 </TextField>
+                {selectedUniverseGroup && (
+                  <Button
+                    size="small"
+                    sx={{ mt: -1 }}
+                    startIcon={<OpenInNewIcon fontSize="small" />}
+                    onClick={() =>
+                      window.open(
+                        `/stocks?tab=groups&group=${selectedUniverseGroup.code}`,
+                        "_blank"
+                      )
+                    }
+                  >
+                    Edit group…
+                  </Button>
+                )}
               </Grid>
 
               {/* Allowed strategies & weights */}
