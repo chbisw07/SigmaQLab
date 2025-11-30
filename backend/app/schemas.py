@@ -1,4 +1,6 @@
 from datetime import date, datetime, time
+from decimal import Decimal
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -206,6 +208,14 @@ class StrategyParameterRead(StrategyParameterBase):
 # -------------------------
 
 
+class GroupCompositionMode(str, Enum):
+    """Composition mode for stock groups/baskets."""
+
+    WEIGHTS = "weights"
+    QTY = "qty"
+    AMOUNT = "amount"
+
+
 class StockBase(BaseModel):
     """Common fields for Stock models."""
 
@@ -291,6 +301,14 @@ class StockGroupBase(BaseModel):
         default=None,
         description="Optional tags, e.g. ['midcap', 'banking']",
     )
+    composition_mode: GroupCompositionMode = Field(
+        default=GroupCompositionMode.WEIGHTS,
+        description="How this basket allocates members: weights, qty, or amount.",
+    )
+    total_investable_amount: Decimal | None = Field(
+        default=None,
+        description="Total investable amount when composition_mode='amount'.",
+    )
 
 
 class StockGroupCreate(StockGroupBase):
@@ -309,6 +327,8 @@ class StockGroupUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     tags: list[str] | None = None
+    composition_mode: GroupCompositionMode | None = None
+    total_investable_amount: Decimal | None = None
 
 
 class StockGroupRead(StockGroupBase):

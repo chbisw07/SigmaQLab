@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Stock, StockGroup, StockGroupMember
 from ..schemas import (
+    GroupCompositionMode,
     StockBulkUpdate,
     StockCreate,
     StockGroupBulkAddBySymbols,
@@ -250,6 +251,12 @@ async def list_stock_groups(
                 name=g.name,
                 description=g.description,
                 tags=g.tags or [],
+                composition_mode=(
+                    GroupCompositionMode(g.composition_mode)
+                    if g.composition_mode
+                    else GroupCompositionMode.WEIGHTS
+                ),
+                total_investable_amount=g.total_investable_amount,
                 created_at=g.created_at,
                 updated_at=g.updated_at,
                 stock_count=stock_count,
@@ -272,11 +279,19 @@ async def create_stock_group(
             detail=f"Stock group with code '{code}' already exists",
         )
 
+    mode = payload.composition_mode
+    if isinstance(mode, GroupCompositionMode):
+        mode_value = mode.value
+    else:
+        mode_value = mode or GroupCompositionMode.WEIGHTS.value
+
     group = StockGroup(
         code=code,
         name=payload.name,
         description=payload.description,
         tags=payload.tags,
+        composition_mode=mode_value,
+        total_investable_amount=payload.total_investable_amount,
     )
     db.add(group)
     db.commit()
@@ -312,6 +327,8 @@ async def create_stock_group(
         name=group.name,
         description=group.description,
         tags=group.tags or [],
+        composition_mode=GroupCompositionMode(group.composition_mode),
+        total_investable_amount=group.total_investable_amount,
         created_at=group.created_at,
         updated_at=group.updated_at,
         stock_count=len(members),
@@ -343,6 +360,8 @@ async def get_stock_group(
         name=group.name,
         description=group.description,
         tags=group.tags or [],
+        composition_mode=GroupCompositionMode(group.composition_mode),
+        total_investable_amount=group.total_investable_amount,
         created_at=group.created_at,
         updated_at=group.updated_at,
         stock_count=len(memberships),
@@ -378,6 +397,15 @@ async def update_stock_group(
         group.description = update_data["description"]
     if "tags" in update_data:
         group.tags = update_data["tags"]
+    if "composition_mode" in update_data and update_data["composition_mode"]:
+        mode = update_data["composition_mode"]
+        if isinstance(mode, GroupCompositionMode):
+            mode_value = mode.value
+        else:
+            mode_value = str(mode)
+        group.composition_mode = mode_value
+    if "total_investable_amount" in update_data:
+        group.total_investable_amount = update_data["total_investable_amount"]
 
     db.add(group)
     db.commit()
@@ -393,6 +421,8 @@ async def update_stock_group(
         name=group.name,
         description=group.description,
         tags=group.tags or [],
+        composition_mode=GroupCompositionMode(group.composition_mode),
+        total_investable_amount=group.total_investable_amount,
         created_at=group.created_at,
         updated_at=group.updated_at,
         stock_count=stock_count,
