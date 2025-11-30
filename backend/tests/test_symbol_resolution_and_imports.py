@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.database import get_db
 from app.models import Stock, StockGroup, StockGroupMember
 from app.routers.stocks import _classify_segment_from_market_cap
@@ -92,6 +94,90 @@ def test_import_portfolio_creates_group_and_members() -> None:
             > 0
         )
         assert membership_exists
+    finally:
+        db.close()
+
+
+def test_tradingview_import_allows_group_composition_mode() -> None:
+    """TradingView import can set the group's composition_mode without errors."""
+
+    csv_content = (
+        "Ticker,Market Capitalization,Sector\n" "RELIANCE,2000000000000,ENERGY\n"
+    )
+    files = {
+        "file": ("tv_mode.csv", csv_content.encode("utf-8"), "text/csv"),
+    }
+    data = {
+        "group_code": "TV_MODE",
+        "group_name": "TV Mode Import",
+        "create_or_update_group": "true",
+        "mark_active": "true",
+        # Explicitly request qty mode to exercise the plumbing.
+        "composition_mode": "qty",
+    }
+
+    resp = client.post(
+        "/api/stocks/import/tradingview",
+        files=files,
+        data=data,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["group_code"] == "TV_MODE"
+
+    db = next(get_db())
+    try:
+        group = db.query(StockGroup).filter(StockGroup.code == "TV_MODE").one()
+        assert group.composition_mode == "qty"
+    finally:
+        db.close()
+
+
+def test_import_portfolio_with_weights_sets_targets() -> None:
+    """Portfolio CSV with a weight column should populate target_weight_pct."""
+
+    csv_content = "Symbol,Weight\nHDFCBANK,60\nINFY,40\n"
+    files = {
+        "file": ("portfolio_weights.csv", csv_content.encode("utf-8"), "text/csv"),
+    }
+    data = {
+        "group_code": "TESTPORTWT",
+        "group_name": "Test Portfolio With Weights",
+        "mark_active": "true",
+    }
+
+    resp = client.post(
+        "/api/stock-groups/import-portfolio-csv",
+        files=files,
+        data=data,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["group_code"] == "TESTPORTWT"
+
+    db = next(get_db())
+    try:
+        group = db.query(StockGroup).filter(StockGroup.code == "TESTPORTWT").one()
+        # Composition mode should be set to weights when a weight column exists.
+        assert group.composition_mode == "weights"
+
+        rows = (
+            db.query(StockGroupMember, Stock)
+            .join(Stock, Stock.id == StockGroupMember.stock_id)
+            .filter(StockGroupMember.group_id == group.id)
+            .all()
+        )
+        assert len(rows) >= 2
+
+        weights: dict[str, float] = {}
+        for member, stock in rows:
+            if member.target_weight_pct is not None:
+                weights[stock.symbol] = float(member.target_weight_pct)
+
+        # Allow for symbol resolution mappings (e.g. HDFCBANK.NS), so we just
+        # check that the total weight and count are as expected.
+        assert pytest.approx(sum(weights.values()), rel=1e-6) == 100.0
+        assert len(weights) >= 2
     finally:
         db.close()
 

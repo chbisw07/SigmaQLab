@@ -171,6 +171,14 @@ def test_portfolio_backtest_read_shape() -> None:
     )
     assert resp.status_code == 200
 
+    # Universe summary in PortfolioRead should surface group metadata.
+    resp = client.get(f"/api/portfolios/{portfolio_id}")
+    assert resp.status_code == 200
+    portfolio = resp.json()
+    assert portfolio["universe"] is not None
+    assert portfolio["universe"]["group_code"] == "PF_GRP"
+    assert portfolio["universe"]["num_stocks"] >= 1
+
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     idx = [start + timedelta(days=i) for i in range(5)]
     for i, ts in enumerate(idx):

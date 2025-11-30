@@ -588,6 +588,48 @@ class BacktestService:
             info["pnl"] += float(trade.pnl)
         metrics["per_symbol"] = per_symbol
 
+        # Attach group composition metadata for introspection. This surfaces
+        # the new composition_mode and per-member target fields to callers
+        # without affecting sizing or PnL calculations.
+        group = meta_db.get(StockGroup, group_id)
+        if group is not None:
+            rows = (
+                meta_db.query(StockGroupMember, Stock.symbol)
+                .join(Stock, Stock.id == StockGroupMember.stock_id)
+                .filter(StockGroupMember.group_id == group_id)
+                .all()
+            )
+            members_meta: List[Dict[str, Any]] = []
+            for member, symbol in rows:
+                members_meta.append(
+                    {
+                        "symbol": symbol,
+                        "target_weight_pct": (
+                            float(member.target_weight_pct)
+                            if member.target_weight_pct is not None
+                            else None
+                        ),
+                        "target_qty": (
+                            float(member.target_qty)
+                            if member.target_qty is not None
+                            else None
+                        ),
+                        "target_amount": (
+                            float(member.target_amount)
+                            if member.target_amount is not None
+                            else None
+                        ),
+                    }
+                )
+            metrics["group_composition"] = {
+                "group_id": group.id,
+                "group_code": group.code,
+                "group_name": group.name,
+                "composition_mode": group.composition_mode or "weights",
+                "member_count": len(rows),
+                "members": members_meta,
+            }
+
         backtest = Backtest(
             strategy_id=strategy.id,
             params_id=params_id,

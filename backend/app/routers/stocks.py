@@ -649,6 +649,14 @@ async def import_tradingview_screener(
             "group does not yet exist."
         ),
     ),
+    composition_mode: GroupCompositionMode | None = Form(
+        default=None,
+        description=(
+            "Optional composition mode for the associated stock group. "
+            "When omitted, the group keeps its existing mode or defaults "
+            "to 'weights'."
+        ),
+    ),
     create_or_update_group: bool = Form(
         default=True,
         description=(
@@ -708,6 +716,15 @@ async def import_tradingview_screener(
 
     group: StockGroup | None = None
     group_code_norm: str | None = None
+    mode_value: str | None = None
+    if composition_mode is not None:
+        # Normalise enum / string into a persisted string value.
+        mode_value = (
+            composition_mode.value
+            if isinstance(composition_mode, GroupCompositionMode)
+            else str(composition_mode)
+        )
+
     if create_or_update_group and group_code:
         group_code_norm = group_code.strip().upper()
         group = (
@@ -724,7 +741,15 @@ async def import_tradingview_screener(
                 name=group_name.strip(),
                 description=None,
                 tags=None,
+                composition_mode=mode_value or "weights",
             )
+            db.add(group)
+            db.commit()
+            db.refresh(group)
+        elif mode_value:
+            # For existing groups, allow caller to override composition_mode
+            # explicitly if requested; otherwise retain current behaviour.
+            group.composition_mode = mode_value
             db.add(group)
             db.commit()
             db.refresh(group)
@@ -869,6 +894,9 @@ async def import_portfolio_csv(
     symbol_idx = -1
     mcap_idx = -1
     sector_idx = -1
+    weight_idx = -1
+    qty_idx = -1
+    amount_idx = -1
     for idx, name in enumerate(header_lower):
         if name in {"symbol", "ticker", "nse code", "nse_code"}:
             symbol_idx = idx
@@ -876,6 +904,18 @@ async def import_portfolio_csv(
             mcap_idx = idx
         elif name == "sector":
             sector_idx = idx
+        elif name in {
+            "weight",
+            "weight%",
+            "allocation %",
+            "alloc %",
+            "wt",
+        }:
+            weight_idx = idx
+        elif name in {"qty", "quantity", "shares"}:
+            qty_idx = idx
+        elif name in {"amount", "value", "allocation", "invested", "invested amount"}:
+            amount_idx = idx
     if symbol_idx == -1:
         raise HTTPException(
             status_code=400,
@@ -892,13 +932,31 @@ async def import_portfolio_csv(
     group = (
         db.query(StockGroup).filter(StockGroup.code == group_code_norm).one_or_none()
     )
+
+    inferred_mode: GroupCompositionMode | None = None
+    if weight_idx != -1:
+        inferred_mode = GroupCompositionMode.WEIGHTS
+    elif qty_idx != -1:
+        inferred_mode = GroupCompositionMode.QTY
+    elif amount_idx != -1:
+        inferred_mode = GroupCompositionMode.AMOUNT
+
     if group is None:
+        mode_value = inferred_mode.value if inferred_mode is not None else "weights"
         group = StockGroup(
             code=group_code_norm,
             name=group_name.strip(),
             description=None,
             tags=None,
+            composition_mode=mode_value,
         )
+        db.add(group)
+        db.commit()
+        db.refresh(group)
+    elif inferred_mode is not None and getattr(group, "composition_mode", None):
+        # Keep existing behaviour by default but allow a CSV with explicit
+        # composition cues to update the mode for existing groups.
+        group.composition_mode = inferred_mode.value
         db.add(group)
         db.commit()
         db.refresh(group)
@@ -907,6 +965,7 @@ async def import_portfolio_csv(
     updated = 0
     added_to_group = 0
     errors: list[dict[str, str | int]] = []
+    total_amount: float = 0.0
 
     for idx, row in enumerate(reader, start=2):
         if symbol_idx >= len(row):
@@ -929,6 +988,33 @@ async def import_portfolio_csv(
         sector_value: str | None = None
         if 0 <= sector_idx < len(row):
             sector_value = _normalise_sector(row[sector_idx])
+
+        weight_value: float | None = None
+        qty_value: float | None = None
+        amount_value: float | None = None
+        if 0 <= weight_idx < len(row):
+            raw_weight = row[weight_idx].replace("%", "").strip()
+            if raw_weight:
+                try:
+                    weight_value = float(raw_weight)
+                except ValueError:
+                    weight_value = None
+        if 0 <= qty_idx < len(row):
+            raw_qty = row[qty_idx].strip()
+            if raw_qty:
+                try:
+                    qty_value = float(raw_qty)
+                except ValueError:
+                    qty_value = None
+        if 0 <= amount_idx < len(row):
+            raw_amt = row[amount_idx].replace(",", "").strip()
+            if raw_amt:
+                try:
+                    amount_value = float(raw_amt)
+                except ValueError:
+                    amount_value = None
+        if amount_value is not None:
+            total_amount += amount_value
 
         resolved: ResolvedSymbol = resolve_symbol(db, raw_symbol)
         if not resolved.resolved or not resolved.exchange:
@@ -989,9 +1075,40 @@ async def import_portfolio_csv(
             .first()
         )
         if link_exists is None:
-            db.add(StockGroupMember(group_id=group.id, stock_id=stock.id))
-            db.commit()
+            member = StockGroupMember(
+                group_id=group.id,
+                stock_id=stock.id,
+            )
+        else:
+            member = link_exists
+
+        # Populate per-member targets based on the inferred composition mode
+        # and any recognised columns present in the CSV. When no such column
+        # is available the targets are left as NULL so existing behaviour is
+        # preserved.
+        if inferred_mode == GroupCompositionMode.WEIGHTS and weight_value is not None:
+            member.target_weight_pct = weight_value
+            member.target_qty = None
+            member.target_amount = None
+        elif inferred_mode == GroupCompositionMode.QTY and qty_value is not None:
+            member.target_weight_pct = None
+            member.target_qty = qty_value
+            member.target_amount = None
+        elif inferred_mode == GroupCompositionMode.AMOUNT and amount_value is not None:
+            member.target_weight_pct = None
+            member.target_qty = None
+            member.target_amount = amount_value
+
+        db.add(member)
+        db.commit()
+
+        if link_exists is None:
             added_to_group += 1
+
+    if inferred_mode == GroupCompositionMode.AMOUNT and total_amount > 0.0:
+        group.total_investable_amount = total_amount
+        db.add(group)
+        db.commit()
 
     return StockImportSummary(
         created_stocks=created,

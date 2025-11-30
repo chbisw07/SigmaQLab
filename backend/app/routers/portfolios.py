@@ -5,13 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Portfolio, PortfolioBacktest
+from ..models import Portfolio, PortfolioBacktest, StockGroup, StockGroupMember
 from ..prices_database import get_prices_db
 from ..schemas import (
+    GroupCompositionMode,
     PortfolioBacktestRead,
     PortfolioCreate,
     PortfolioRead,
     PortfolioUpdate,
+    PortfolioUniverseSummary,
 )
 from ..portfolio_service import PortfolioService
 
@@ -23,6 +25,49 @@ def _get_portfolio_or_404(db: Session, portfolio_id: int) -> Portfolio:
     if portfolio is None:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     return portfolio
+
+
+def _build_portfolio_read(db: Session, obj: Portfolio) -> PortfolioRead:
+    """Construct a PortfolioRead including optional universe summary.
+
+    Existing fields are populated via from_attributes on the ORM object so
+    API compatibility is preserved; universe metadata is attached as an
+    additional, optional field for display/UX purposes.
+    """
+
+    universe: PortfolioUniverseSummary | None = None
+    scope = obj.universe_scope or ""
+    if scope.startswith("group:"):
+        _, group_id_str = scope.split(":", 1)
+        try:
+            group_id = int(group_id_str)
+        except ValueError:
+            group_id = None
+
+        if group_id is not None:
+            group = db.get(StockGroup, group_id)
+            if group is not None:
+                num_stocks = (
+                    db.query(StockGroupMember)
+                    .filter(StockGroupMember.group_id == group.id)
+                    .count()
+                )
+                mode = (
+                    GroupCompositionMode(group.composition_mode)
+                    if getattr(group, "composition_mode", None)
+                    else GroupCompositionMode.WEIGHTS
+                )
+                universe = PortfolioUniverseSummary(
+                    group_id=group.id,
+                    group_code=group.code,
+                    group_name=group.name,
+                    composition_mode=mode,
+                    num_stocks=int(num_stocks),
+                )
+
+    model = PortfolioRead.model_validate(obj)
+    model.universe = universe
+    return model
 
 
 @router.post("", response_model=PortfolioRead, status_code=201)
@@ -54,7 +99,7 @@ async def create_portfolio(
     db.add(obj)
     db.commit()
     db.refresh(obj)
-    return PortfolioRead.model_validate(obj)
+    return _build_portfolio_read(db, obj)
 
 
 @router.get("", response_model=List[PortfolioRead])
@@ -64,7 +109,7 @@ async def list_portfolios(
     """List all portfolios."""
 
     items = db.query(Portfolio).order_by(Portfolio.created_at.asc()).all()
-    return [PortfolioRead.model_validate(p) for p in items]
+    return [_build_portfolio_read(db, p) for p in items]
 
 
 @router.get("/{portfolio_id}", response_model=PortfolioRead)
@@ -75,7 +120,7 @@ async def get_portfolio(
     """Fetch a single portfolio by id."""
 
     obj = _get_portfolio_or_404(db, portfolio_id)
-    return PortfolioRead.model_validate(obj)
+    return _build_portfolio_read(db, obj)
 
 
 @router.put("/{portfolio_id}", response_model=PortfolioRead)
@@ -117,7 +162,7 @@ async def update_portfolio(
     db.add(obj)
     db.commit()
     db.refresh(obj)
-    return PortfolioRead.model_validate(obj)
+    return _build_portfolio_read(db, obj)
 
 
 @router.delete("/{portfolio_id}", status_code=204)

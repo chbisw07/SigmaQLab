@@ -8,7 +8,7 @@ from app.backtest_engine import BacktestConfig, BacktraderEngine
 from app.backtest_service import BacktestService
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import Strategy, StrategyParameter
+from app.models import Stock, StockGroup, StockGroupMember, Strategy, StrategyParameter
 from app.prices_database import PricesBase, PricesSessionLocal, prices_engine
 from app.prices_models import PriceBar
 
@@ -168,6 +168,115 @@ def test_backtest_service_persists_backtest_record() -> None:
         assert hasattr(trade, "max_theoretical_pnl")
         assert hasattr(trade, "max_theoretical_pnl_pct")
         assert hasattr(trade, "pnl_capture_ratio")
+
+    meta_session.close()
+    prices_session.close()
+
+
+def test_group_backtest_includes_group_composition_metadata() -> None:
+    """Group backtests should attach group composition metadata in metrics."""
+
+    meta_session = SessionLocal()
+    prices_session = PricesSessionLocal()
+
+    # Ensure a strategy and params exist (reuse SMA_X_SERVICE).
+    code = "SMA_X_SERVICE"
+    strategy = meta_session.query(Strategy).filter_by(code=code).first()
+    if strategy is None:
+        strategy = Strategy(
+            name="SMA Crossover Test",
+            code=code,
+            category="trend",
+            description="Test strategy for group backtests",
+            status="experimental",
+        )
+        meta_session.add(strategy)
+        meta_session.commit()
+        meta_session.refresh(strategy)
+
+    params = (
+        meta_session.query(StrategyParameter)
+        .filter(
+            StrategyParameter.strategy_id == strategy.id,
+            StrategyParameter.label == "default",
+        )
+        .order_by(StrategyParameter.id.asc())
+        .first()
+    )
+    if params is None:
+        params = StrategyParameter(
+            strategy_id=strategy.id,
+            label="default",
+            params_json={"fast": 5, "slow": 20},
+            notes="Group backtest params",
+        )
+        meta_session.add(params)
+        meta_session.commit()
+        meta_session.refresh(params)
+
+    # Use one of the seeded example groups (weights mode).
+    group = (
+        meta_session.query(StockGroup).filter(StockGroup.code == "GRP_WEIGHTS").one()
+    )
+    members = (
+        meta_session.query(StockGroupMember, Stock)
+        .join(Stock, Stock.id == StockGroupMember.stock_id)
+        .filter(StockGroupMember.group_id == group.id)
+        .all()
+    )
+    assert members
+
+    # Seed simple synthetic prices for each member symbol.
+    start = datetime(2024, 1, 1)
+    idx = [start + timedelta(days=i) for i in range(60)]
+    for _member, stock in members:
+        for i, ts in enumerate(idx):
+            prices_session.add(
+                PriceBar(
+                    symbol=stock.symbol,
+                    exchange=stock.exchange or "NSE",
+                    timeframe="1d",
+                    timestamp=ts,
+                    open=100 + i,
+                    high=101 + i,
+                    low=99 + i,
+                    close=100 + i,
+                    volume=1000,
+                    source="synthetic",
+                )
+            )
+    prices_session.commit()
+
+    service = BacktestService()
+    bt = service.run_group_backtest(
+        meta_db=meta_session,
+        prices_db=prices_session,
+        strategy_id=strategy.id,
+        group_id=group.id,
+        timeframe="1d",
+        start=idx[0],
+        end=idx[-1],
+        initial_capital=100_000.0,
+        params=None,
+        params_id=params.id,
+        price_source="synthetic",
+    )
+
+    metrics = bt.metrics_json or {}
+    assert "group_composition" in metrics
+    comp = metrics["group_composition"]
+    assert comp["group_id"] == group.id
+    assert comp["group_code"] == group.code
+    assert comp["composition_mode"] == group.composition_mode
+    assert comp["member_count"] == len(members)
+    assert isinstance(comp["members"], list)
+    assert comp["members"]
+    first_member = comp["members"][0]
+    # Plumbing-only: target fields may be None, but keys should exist.
+    assert "symbol" in first_member
+    assert "target_weight_pct" in first_member
+    assert "target_qty" in first_member
+    assert "target_amount" in first_member
 
     meta_session.close()
     prices_session.close()

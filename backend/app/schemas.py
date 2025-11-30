@@ -555,6 +555,16 @@ class BacktestChartDataResponse(BaseModel):
 # -------------------------
 
 
+class PortfolioUniverseSummary(BaseModel):
+    """Lightweight summary of a portfolio's universe group (if any)."""
+
+    group_id: int
+    group_code: str
+    group_name: str
+    composition_mode: GroupCompositionMode
+    num_stocks: int
+
+
 class PortfolioBase(BaseModel):
     """Common fields for Portfolio models."""
 
@@ -627,6 +637,7 @@ class PortfolioRead(PortfolioBase):
         default=None,
         validation_alias="rebalance_policy_json",
     )
+    universe: PortfolioUniverseSummary | None = None
 
     model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
 
