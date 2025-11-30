@@ -11,7 +11,7 @@ from .routers import data as data_router
 from .routers import portfolios as portfolios_router
 from .routers import stocks as stocks_router
 from .routers import strategies as strategies_router
-from .seed import seed_preset_strategies
+from .seed import seed_example_stock_groups, seed_preset_strategies
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -30,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Seed preset strategies and parameter sets in the meta DB.
     with SessionLocal() as session:
         seed_preset_strategies(session)
+        seed_example_stock_groups(session)
 
     app = FastAPI(title=_settings.app_name)
 

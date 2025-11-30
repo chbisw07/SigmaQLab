@@ -8,6 +8,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
 )
@@ -192,6 +193,8 @@ class StockGroup(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     tags = Column(JSON, nullable=True)
+    composition_mode = Column(String, nullable=False, default="weights")
+    total_investable_amount = Column(Numeric(20, 4), nullable=True)
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),
@@ -216,6 +219,9 @@ class StockGroupMember(Base):
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(Integer, ForeignKey("stock_groups.id"), nullable=False)
     stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    target_weight_pct = Column(Numeric(10, 4), nullable=True)
+    target_qty = Column(Numeric(20, 4), nullable=True)
+    target_amount = Column(Numeric(20, 4), nullable=True)
 
     group = relationship("StockGroup", back_populates="members")
     stock = relationship("Stock", back_populates="group_memberships")
