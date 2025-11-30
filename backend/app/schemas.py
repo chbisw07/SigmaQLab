@@ -251,6 +251,16 @@ class StockUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class StockImportSummary(BaseModel):
+    """Summary returned by CSV-based stock/group import endpoints."""
+
+    created_stocks: int
+    updated_stocks: int
+    added_to_group: int
+    group_code: str | None = None
+    errors: list[dict[str, Any]]
+
+
 class StockRead(StockBase):
     """Stock representation returned by the API."""
 

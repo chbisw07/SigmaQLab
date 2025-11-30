@@ -12,6 +12,7 @@ import {
   DialogTitle,
   FormControlLabel,
   Grid,
+  IconButton,
   MenuItem,
   Paper,
   Stack,
@@ -21,6 +22,7 @@ import {
   Snackbar
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import DeleteIcon from "@mui/icons-material/Delete";
 import {
   DataGrid,
   type GridColDef,
@@ -137,6 +139,8 @@ export const PortfolioListPage = () => {
   const [snackbarSeverity, setSnackbarSeverity] = useState<
     "success" | "error" | "info"
   >("info");
+
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
   useEffect(() => {
     const loadAll = async () => {
@@ -405,6 +409,40 @@ export const PortfolioListPage = () => {
     }
   };
 
+  const handleRequestDelete = (id: number) => {
+    setDeleteTargetId(id);
+  };
+
+  const handleCloseDeleteDialog = () => {
+    setDeleteTargetId(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (deleteTargetId == null) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/portfolios/${deleteTargetId}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        setSnackbarSeverity("error");
+        setSnackbarMessage("Failed to delete portfolio.");
+        return;
+      }
+      setPortfolios((prev) =>
+        prev.filter((p) => p.id !== deleteTargetId)
+      );
+      setSnackbarSeverity("success");
+      setSnackbarMessage("Portfolio deleted.");
+    } catch (error) {
+      setSnackbarSeverity("error");
+      setSnackbarMessage(
+        error instanceof Error ? error.message : "Unexpected error occurred."
+      );
+    } finally {
+      setDeleteTargetId(null);
+    }
+  };
+
   const columns: GridColDef<PortfolioRow>[] = [
     {
       field: "code",
@@ -500,7 +538,7 @@ export const PortfolioListPage = () => {
       sortable: false,
       filterable: false,
       flex: 1,
-      minWidth: 180,
+      minWidth: 220,
       renderCell: (params: GridRenderCellParams<PortfolioRow>) => {
         return (
           <Stack direction="row" spacing={1}>
@@ -524,6 +562,16 @@ export const PortfolioListPage = () => {
             >
               Run BT
             </Button>
+            <IconButton
+              size="small"
+              color="error"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRequestDelete(params.row.id);
+              }}
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
           </Stack>
         );
       }
@@ -872,6 +920,33 @@ export const PortfolioListPage = () => {
             </Button>
           </DialogActions>
         </form>
+      </Dialog>
+
+      {/* Delete confirmation dialog */}
+      <Dialog
+        open={deleteTargetId != null}
+        onClose={handleCloseDeleteDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Delete portfolio?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Are you sure you want to delete this portfolio? This will remove its
+            definition and any portfolio backtests. This action cannot be
+            undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDeleteDialog}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={handleConfirmDelete}
+          >
+            Delete
+          </Button>
+        </DialogActions>
       </Dialog>
 
       <Snackbar

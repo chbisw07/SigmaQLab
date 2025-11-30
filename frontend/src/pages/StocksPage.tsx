@@ -49,7 +49,7 @@ type StockGroupDetail = StockGroup & {
   members: Stock[];
 };
 
-type TabId = "universe" | "groups";
+type TabId = "universe" | "groups" | "imports";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -103,7 +103,7 @@ export const StocksPage = () => {
       setStocksState("loading");
       setStocksError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/stocks?active_only=false`);
+      const res = await fetch(`${API_BASE}/api/stocks?active_only=false`);
         if (!res.ok) {
           setStocksState("error");
           setStocksError("Failed to load stocks universe.");
@@ -768,6 +768,7 @@ export const StocksPage = () => {
       >
         <Tab label="Universe" value="universe" />
         <Tab label="Groups" value="groups" />
+         <Tab label="Imports" value="imports" />
       </Tabs>
 
       {tab === "universe" && (
@@ -979,6 +980,194 @@ export const StocksPage = () => {
                     </Table>
                   </Box>
                 )}
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      )}
+
+      {tab === "imports" && (
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={6}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Import TradingView screener CSV
+                </Typography>
+                <Typography variant="body2" color="textSecondary" gutterBottom>
+                  Upload a TradingView screener export and optionally map it
+                  into a stock group. The backend will attempt to resolve
+                  symbols and exchanges automatically.
+                </Typography>
+                <Box
+                  sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}
+                >
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    size="small"
+                  >
+                    Upload CSV
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      hidden
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const formData = new FormData();
+                        formData.append("file", file);
+                        formData.append("group_code", "TV_IMPORT");
+                        formData.append(
+                          "group_name",
+                          "TradingView screener import"
+                        );
+                        formData.append("create_or_update_group", "true");
+                        formData.append("mark_active", "true");
+                        try {
+                          const res = await fetch(
+                            `${API_BASE}/api/stocks/import/tradingview`,
+                            {
+                              method: "POST",
+                              body: formData
+                            }
+                          );
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            // eslint-disable-next-line no-alert
+                            window.alert(
+                              (err as { detail?: string }).detail ??
+                                "Failed to import TradingView CSV."
+                            );
+                            return;
+                          }
+                          const summary = await res.json();
+                          const msg = [
+                            `Created stocks: ${summary.created_stocks}`,
+                            `Updated stocks: ${summary.updated_stocks}`,
+                            `Added to group: ${summary.added_to_group}`,
+                            summary.errors?.length
+                              ? `Errors: ${summary.errors.length}`
+                              : null
+                          ]
+                            .filter(Boolean)
+                            .join(", ");
+                          // eslint-disable-next-line no-alert
+                          window.alert(msg);
+                        } catch (error) {
+                          // eslint-disable-next-line no-alert
+                          window.alert(
+                            error instanceof Error
+                              ? error.message
+                              : "Unexpected error during import."
+                          );
+                        } finally {
+                          e.target.value = "";
+                        }
+                      }}
+                    />
+                  </Button>
+                  <Typography variant="body2" color="textSecondary">
+                    Expected to contain a column named{" "}
+                    <strong>Ticker</strong> or <strong>Symbol</strong>. Other
+                    columns are ignored.
+                  </Typography>
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Import portfolio CSV
+                </Typography>
+                <Typography variant="body2" color="textSecondary" gutterBottom>
+                  Import a portfolio CSV and map it into a stock group that can
+                  be used as a universe for portfolios and backtests.
+                </Typography>
+                <Box
+                  sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}
+                >
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    size="small"
+                  >
+                    Upload CSV
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      hidden
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const groupCode = window.prompt(
+                          "Enter group code (e.g. HPS):",
+                          "HPS"
+                        );
+                        const groupName = window.prompt(
+                          "Enter group name:",
+                          "Imported portfolio"
+                        );
+                        if (!groupCode || !groupName) {
+                          e.target.value = "";
+                          return;
+                        }
+                        const formData = new FormData();
+                        formData.append("file", file);
+                        formData.append("group_code", groupCode);
+                        formData.append("group_name", groupName);
+                        formData.append("mark_active", "true");
+                        try {
+                          const res = await fetch(
+                            `${API_BASE}/api/stock-groups/import-portfolio-csv`,
+                            {
+                              method: "POST",
+                              body: formData
+                            }
+                          );
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            // eslint-disable-next-line no-alert
+                            window.alert(
+                              (err as { detail?: string }).detail ??
+                                "Failed to import portfolio CSV."
+                            );
+                            return;
+                          }
+                          const summary = await res.json();
+                          const msg = [
+                            `Created stocks: ${summary.created_stocks}`,
+                            `Updated stocks: ${summary.updated_stocks}`,
+                            `Added to group: ${summary.added_to_group}`,
+                            summary.errors?.length
+                              ? `Errors: ${summary.errors.length}`
+                              : null
+                          ]
+                            .filter(Boolean)
+                            .join(", ");
+                          // eslint-disable-next-line no-alert
+                          window.alert(msg);
+                        } catch (error) {
+                          // eslint-disable-next-line no-alert
+                          window.alert(
+                            error instanceof Error
+                              ? error.message
+                              : "Unexpected error during import."
+                          );
+                        } finally {
+                          e.target.value = "";
+                        }
+                      }}
+                    />
+                  </Button>
+                  <Typography variant="body2" color="textSecondary">
+                    Expected to contain a column named{" "}
+                    <strong>Symbol</strong> or <strong>Ticker</strong>. All
+                    resolved symbols will be added to the specified group.
+                  </Typography>
+                </Box>
               </CardContent>
             </Card>
           </Grid>

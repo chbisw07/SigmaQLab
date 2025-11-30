@@ -125,9 +125,18 @@ async def delete_portfolio(
     portfolio_id: int,
     db: Session = Depends(get_db),
 ) -> None:
-    """Delete a portfolio definition."""
+    """Delete a portfolio definition.
+
+    Any portfolio-level backtests associated with this portfolio are removed
+    first so that the delete does not violate foreign-key constraints.
+    """
 
     obj = _get_portfolio_or_404(db, portfolio_id)
+
+    db.query(PortfolioBacktest).filter(
+        PortfolioBacktest.portfolio_id == portfolio_id
+    ).delete(synchronize_session=False)
+
     db.delete(obj)
     db.commit()
     return None

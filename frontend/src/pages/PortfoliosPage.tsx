@@ -82,9 +82,6 @@ export const PortfoliosPage = () => {
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<number | null>(
     null
   );
-  const [selectedPortfolio, setSelectedPortfolio] = useState<Portfolio | null>(
-    null
-  );
 
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -159,7 +156,6 @@ export const PortfoliosPage = () => {
 
   const resetForm = () => {
     setSelectedPortfolioId(null);
-    setSelectedPortfolio(null);
     setCode("");
     setName("");
     setBaseCurrency("INR");
@@ -177,7 +173,6 @@ export const PortfoliosPage = () => {
 
   const handleSelectPortfolio = (p: Portfolio) => {
     setSelectedPortfolioId(p.id);
-    setSelectedPortfolio(p);
     setCode(p.code);
     setName(p.name);
     setBaseCurrency(p.base_currency || "INR");

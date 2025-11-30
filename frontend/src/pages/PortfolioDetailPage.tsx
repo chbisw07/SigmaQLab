@@ -149,7 +149,6 @@ export const PortfolioDetailPage = () => {
   const [loadState, setLoadState] = useState<FetchState>("idle");
 
   const [backtests, setBacktests] = useState<PortfolioBacktest[]>([]);
-  const [backtestsState, setBacktestsState] = useState<FetchState>("idle");
   const [selectedBacktestId, setSelectedBacktestId] = useState<number | null>(
     null
   );
@@ -279,20 +278,17 @@ export const PortfolioDetailPage = () => {
           const btData: PortfolioBacktest[] = await btRes.json();
           setBacktests(btData);
           if (btData.length > 0) {
-            setBacktestsState("success");
             setSelectedBacktestId(btData[0].id);
             setSelectedBacktest(btData[0]);
           } else {
-            setBacktestsState("idle");
+            setSelectedBacktestId(null);
+            setSelectedBacktest(null);
           }
-        } else {
-          setBacktestsState("error");
         }
 
         setLoadState("success");
       } catch {
         setLoadState("error");
-        setBacktestsState("error");
       }
     };
     void load();

@@ -1,6 +1,14 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -11,10 +19,34 @@ from ..schemas import (
     StockGroupDetail,
     StockGroupMembersUpdate,
     StockGroupRead,
+    StockImportSummary,
     StockRead,
     StockUpdate,
     StockGroupUpdate,
 )
+from ..symbol_resolution import ResolvedSymbol, resolve_symbol
+
+
+def _detect_delimiter(text: str) -> str:
+    """Best-effort detection of CSV delimiter.
+
+    TradingView exports are sometimes comma-separated and sometimes
+    tab-separated. We inspect the first non-empty line and pick a sensible
+    delimiter based on the characters we see.
+    """
+
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if "\t" in line and "," not in line:
+            return "\t"
+        if "," in line:
+            return ","
+        break
+    # Fallback to comma; the csv module will then treat the entire line as
+    # a single field if the guess is wrong, which we handle downstream.
+    return ","
+
 
 router = APIRouter(prefix="/api", tags=["Stocks"])
 
@@ -413,3 +445,312 @@ async def remove_group_member(
         StockGroupMember.stock_id == stock_id,
     ).delete()
     db.commit()
+
+
+@router.post(
+    "/stocks/import/tradingview",
+    response_model=StockImportSummary,
+    status_code=201,
+)
+async def import_tradingview_screener(
+    file: UploadFile = File(...),
+    group_code: str | None = Form(
+        default=None,
+        description="Optional group code to create/update for this universe.",
+    ),
+    group_name: str | None = Form(
+        default=None,
+        description=(
+            "Optional group name; required if group_code is provided and the "
+            "group does not yet exist."
+        ),
+    ),
+    create_or_update_group: bool = Form(
+        default=True,
+        description=(
+            "If true, create or update a stock group " "with the resolved symbols."
+        ),
+    ),
+    mark_active: bool = Form(
+        default=True,
+        description="If true, mark all imported stocks as active in the universe.",
+    ),
+    db: Session = Depends(get_db),
+) -> StockImportSummary:
+    """Import a TradingView screener CSV and upsert stocks (+ optional group).
+
+    The endpoint is intentionally tolerant of CSV header variants. It will try
+    to locate a suitable symbol column using common TradingView conventions
+    such as 'Ticker' or 'Symbol'.
+    """
+
+    import csv
+    from io import StringIO
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8")
+    except Exception as exc:  # pragma: no cover - defensive
+        msg = f"Unable to decode CSV as UTF-8: {exc}"
+        raise HTTPException(status_code=400, detail=msg) from exc
+
+    delimiter = _detect_delimiter(text)
+    reader = csv.reader(StringIO(text), delimiter=delimiter)
+    try:
+        header = next(reader)
+    except StopIteration as exc:
+        raise HTTPException(status_code=400, detail="CSV file is empty") from exc
+    header_lower = [h.strip().lower() for h in header]
+    symbol_idx = -1
+    for idx, name in enumerate(header_lower):
+        if name in {"ticker", "symbol", "nse code", "nse_code"}:
+            symbol_idx = idx
+            break
+    if symbol_idx == -1:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to locate a symbol/ticker column in the CSV header.",
+        )
+
+    created = 0
+    updated = 0
+    added_to_group = 0
+    errors: list[dict[str, str | int]] = []
+
+    group: StockGroup | None = None
+    group_code_norm: str | None = None
+    if create_or_update_group and group_code:
+        group_code_norm = group_code.strip().upper()
+        group = (
+            db.query(StockGroup)
+            .filter(StockGroup.code == group_code_norm)
+            .one_or_none()
+        )
+        if group is None:
+            if not group_name:
+                detail = "group_name is required when creating a new group."
+                raise HTTPException(status_code=400, detail=detail)
+            group = StockGroup(
+                code=group_code_norm,
+                name=group_name.strip(),
+                description=None,
+                tags=None,
+            )
+            db.add(group)
+            db.commit()
+            db.refresh(group)
+
+    for idx, row in enumerate(reader, start=2):
+        if symbol_idx >= len(row):
+            continue
+        raw_symbol = row[symbol_idx].strip()
+        if not raw_symbol:
+            continue
+
+        resolved: ResolvedSymbol = resolve_symbol(db, raw_symbol)
+        if not resolved.resolved or not resolved.exchange:
+            errors.append(
+                {
+                    "row": idx,
+                    "symbol": raw_symbol,
+                    "reason": resolved.reason or "Unresolved symbol",
+                }
+            )
+            continue
+
+        stock = (
+            db.query(Stock)
+            .filter(
+                Stock.symbol == resolved.symbol,
+                Stock.exchange == resolved.exchange,
+            )
+            .one_or_none()
+        )
+        if stock is None:
+            stock = Stock(
+                symbol=resolved.symbol,
+                exchange=resolved.exchange,
+                segment=None,
+                name=None,
+                sector=None,
+                tags=None,
+                is_active=bool(mark_active),
+            )
+            db.add(stock)
+            db.commit()
+            db.refresh(stock)
+            created += 1
+        else:
+            if mark_active and not stock.is_active:
+                stock.is_active = True
+                db.add(stock)
+                db.commit()
+            updated += 1
+
+        if group is not None:
+            link_exists = (
+                db.query(StockGroupMember)
+                .filter(
+                    StockGroupMember.group_id == group.id,
+                    StockGroupMember.stock_id == stock.id,
+                )
+                .first()
+            )
+            if link_exists is None:
+                db.add(StockGroupMember(group_id=group.id, stock_id=stock.id))
+                db.commit()
+                added_to_group += 1
+
+    return StockImportSummary(
+        created_stocks=created,
+        updated_stocks=updated,
+        added_to_group=added_to_group,
+        group_code=group.code if group is not None else group_code_norm,
+        errors=errors,
+    )
+
+
+@router.post(
+    "/stock-groups/import-portfolio-csv",
+    response_model=StockImportSummary,
+    status_code=201,
+)
+async def import_portfolio_csv(
+    file: UploadFile = File(...),
+    group_code: str = Form(...),
+    group_name: str = Form(...),
+    mark_active: bool = Form(
+        default=True,
+        description="If true, mark all imported stocks as active in the universe.",
+    ),
+    db: Session = Depends(get_db),
+) -> StockImportSummary:
+    """Import a portfolio CSV and map it into a stock group.
+
+    The CSV is expected to contain at least one column describing the symbol
+    (e.g. 'Symbol', 'Ticker', or 'NSE Code'). If the group already exists,
+    new members are merged into it.
+    """
+
+    import csv
+    from io import StringIO
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8")
+    except Exception as exc:  # pragma: no cover - defensive
+        msg = f"Unable to decode CSV as UTF-8: {exc}"
+        raise HTTPException(status_code=400, detail=msg) from exc
+
+    delimiter = _detect_delimiter(text)
+    reader = csv.reader(StringIO(text), delimiter=delimiter)
+    try:
+        header = next(reader)
+    except StopIteration as exc:
+        raise HTTPException(status_code=400, detail="CSV file is empty") from exc
+
+    header_lower = [h.strip().lower() for h in header]
+    symbol_idx = -1
+    for idx, name in enumerate(header_lower):
+        if name in {"symbol", "ticker", "nse code", "nse_code"}:
+            symbol_idx = idx
+            break
+    if symbol_idx == -1:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to locate a symbol/ticker column in the CSV header.",
+        )
+
+    group_code_norm = group_code.strip().upper()
+    if not group_code_norm or not group_name.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="group_code and group_name are required.",
+        )
+
+    group = (
+        db.query(StockGroup).filter(StockGroup.code == group_code_norm).one_or_none()
+    )
+    if group is None:
+        group = StockGroup(
+            code=group_code_norm,
+            name=group_name.strip(),
+            description=None,
+            tags=None,
+        )
+        db.add(group)
+        db.commit()
+        db.refresh(group)
+
+    created = 0
+    updated = 0
+    added_to_group = 0
+    errors: list[dict[str, str | int]] = []
+
+    for idx, row in enumerate(reader, start=2):
+        if symbol_idx >= len(row):
+            continue
+        raw_symbol = row[symbol_idx].strip()
+        if not raw_symbol:
+            continue
+
+        resolved: ResolvedSymbol = resolve_symbol(db, raw_symbol)
+        if not resolved.resolved or not resolved.exchange:
+            errors.append(
+                {
+                    "row": idx,
+                    "symbol": raw_symbol,
+                    "reason": resolved.reason or "Unresolved symbol",
+                }
+            )
+            continue
+
+        stock = (
+            db.query(Stock)
+            .filter(
+                Stock.symbol == resolved.symbol,
+                Stock.exchange == resolved.exchange,
+            )
+            .one_or_none()
+        )
+        if stock is None:
+            stock = Stock(
+                symbol=resolved.symbol,
+                exchange=resolved.exchange,
+                segment=None,
+                name=None,
+                sector=None,
+                tags=None,
+                is_active=bool(mark_active),
+            )
+            db.add(stock)
+            db.commit()
+            db.refresh(stock)
+            created += 1
+        else:
+            if mark_active and not stock.is_active:
+                stock.is_active = True
+                db.add(stock)
+                db.commit()
+            updated += 1
+
+        link_exists = (
+            db.query(StockGroupMember)
+            .filter(
+                StockGroupMember.group_id == group.id,
+                StockGroupMember.stock_id == stock.id,
+            )
+            .first()
+        )
+        if link_exists is None:
+            db.add(StockGroupMember(group_id=group.id, stock_id=stock.id))
+            db.commit()
+            added_to_group += 1
+
+    return StockImportSummary(
+        created_stocks=created,
+        updated_stocks=updated,
+        added_to_group=added_to_group,
+        group_code=group.code,
+        errors=errors,
+    )
