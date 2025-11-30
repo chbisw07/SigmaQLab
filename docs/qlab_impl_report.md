@@ -199,6 +199,51 @@ How to run:
     - The drawer width is fixed at 240px, with the main content area padded and offset below the app bar.
   - Branding and layout choices are aligned with the PRD’s focus on a clean, professional research lab UI.
 
+---
+
+## Sprint S15 – Group stocks redesign QA & polish (G03)
+
+**Group:** G03 – QA & polish for group stocks redesign
+**Tasks:** S15_G03_TB001–S15_G03_TF002
+**Status (Codex):** implemented
+
+### QA scope
+
+- Verified all three composition modes (weights / qty / amount) end-to-end in the Stocks → Groups tab:
+  - Created fresh baskets for each mode and exercised “Add stock”, “Add from universe…”, and CSV import flows.
+  - Used toolbar actions (“Equalize…”, “Remove selected”) and confirmed edits persisted after reload.
+  - Deep-linked via `/stocks?tab=groups&group=<CODE>` and ensured the correct basket auto-selected.
+- Backtests QA:
+  - Ran group backtests for the seeded example baskets and the newly created QA baskets.
+  - Confirmed the dropdown renders `CODE – Name (mode, #stocks)`, “View group” opens the group editor, and backtest payloads remain unchanged.
+- Portfolio QA:
+  - Created portfolios that reference each basket as their universe.
+  - Edited settings, saved, reloaded, and ran portfolio backtests to ensure no regressions.
+
+### Bugs fixed during QA
+
+1. **Groups tab crash when list empty**
+   - Root cause: `GroupList` assumed a truthy `row` object while MUI can pass `undefined` during selection changes, causing `Cannot read properties of null (reading 'composition_mode')`.
+   - Fix: guard value formatter/selection handlers with null checks and return to the default “weights” label.
+2. **Members grid formatter crash**
+   - Root cause: DataGrid invoked the column `valueFormatter` with an undefined params object when editing; we accessed `params.value` directly.
+   - Fix: wrap formatter with `params?.value` guard so undefined rows no longer crash the Composition tab.
+3. **Consistency fixes uncovered while polishing UI**
+   - Ensured `View group` / `Edit group…` buttons only render when a selection exists and use consistent spacing/icons across Backtests and Portfolios.
+
+### UI polish highlights
+
+- Stocks → Groups tab now matches Portfolio page typography/spacing; the group header uses `h5`/`body2`, toolbar buttons are compact, and DataGrid spacing matches other lists.
+- Backtests “Stock group (basket)” selector shows helper text, uses the enriched label, and positions the “View group” button directly beneath the field for better alignment.
+- Portfolio “Universe” field mirrors the Backtests selector, shows the same enriched label, adds helper text, and surfaces an “Edit group…” button that deep-links to the Groups tab.
+
+### Outstanding items / follow-ups
+
+- CSV import dialog currently relies on manual prompts for group code/name; future enhancement could reuse the new group metadata panel for a better UX.
+- Deployments tab in the basket detail is a placeholder; plan to populate once deployment workstreams begin (per PRD).
+- Would be useful to add automated Cypress flows for the three QA scenarios to catch regressions earlier.
+
+
 Key files:
 
 - `frontend/src/theme.ts`

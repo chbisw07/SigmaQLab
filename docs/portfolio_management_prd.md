@@ -39,12 +39,25 @@ We assume:
 
 - **Stock Universe**:
   - Table of stocks (`Stock`) with symbol, exchange, sector, tags, is_active.
-- **Stock Groups**:
+- **Stock Groups / Baskets**:
   - Named subsets of `U` (e.g. `NIFTY50`, `HighPotentialMidcaps`).
 - **Strategies**:
   - As today: business strategies referencing a strategy engine (`engine_code`) + parameter sets.
 
 Portfolio management builds on this foundation; it does **not** replace it.
+
+#### 2.1.1 Stock groups as composition-aware baskets
+
+As of S14–S15 the legacy “stock group” concept has been extended into a true **basket** model:
+
+- Each `StockGroup` carries a `composition_mode` (`weights`, `qty`, or `amount`) plus optional `total_investable_amount`.
+- Each `StockGroupMember` can store mode-appropriate targets (`target_weight_pct`, `target_qty`, `target_amount`).
+- The Stocks → Groups UI exposes a two-pane basket editor where researchers can:
+  - Switch composition mode, equalise targets, and edit members inline.
+  - Add members individually, in bulk from the universe, or via CSV import.
+- Backtests and Portfolios consume these baskets as universes, displaying labels such as `CODE – Name (mode, #stocks)` with deep links back to the basket editor.
+
+This keeps **universe management** centralised: once a basket is curated, it can be reused consistently across capital-aware backtests and portfolio definitions without duplicating membership metadata.
 
 ### 2.2 Portfolio Definition
 
@@ -55,7 +68,7 @@ Fields (initial):
 - `id`, `code`, `name`,
 - `base_currency` (INR),
 - `universe_scope`:
-  - `group:<group_id>`,
+  - `group:<group_id>` (points at a basket with explicit `composition_mode` + member targets),
   - `tag_filter:<tag>` (future),
   - or explicit `universe:custom` list.
 - **Allowed strategies**:
