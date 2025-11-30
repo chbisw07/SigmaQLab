@@ -336,6 +336,26 @@ class StockGroupMembersUpdate(BaseModel):
     )
 
 
+class StockBulkUpdate(BaseModel):
+    """Payload for bulk stock operations by id."""
+
+    ids: list[int] = Field(
+        ...,
+        description="IDs of stocks to update in bulk",
+        min_length=1,
+    )
+
+
+class StockGroupBulkAddBySymbols(BaseModel):
+    """Payload to bulk-add group members by symbol."""
+
+    symbols: list[str] = Field(
+        ...,
+        description="Symbol codes to add as members of this group",
+        min_length=1,
+    )
+
+
 # -------------------------
 # Backtest service schemas
 # -------------------------
