@@ -38,6 +38,7 @@ export type StockGroupMember = {
   sector?: string | null;
   tags?: string[] | null;
   is_active?: boolean;
+   analyst_rating?: string | null;
   target_weight_pct?: number | null;
   target_qty?: number | null;
   target_amount?: number | null;

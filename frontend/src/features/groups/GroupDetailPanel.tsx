@@ -102,13 +102,16 @@ export const GroupDetailPanel = ({
         type: "success",
         text: `Composition mode updated to ${mode}.`
       });
-      onGroupUpdated();
       const updated: StockGroupSummary = await res.json();
       setDetail((prev) =>
         prev
           ? { ...prev, composition_mode: mode, updated_at: updated.updated_at }
           : prev
       );
+      onGroupUpdated();
+      if (detail.members.length > 0) {
+        await handleEqualise();
+      }
     } catch (err) {
       setActionMessage({
         type: "error",

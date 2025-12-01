@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from typing import List
 
 from fastapi import (
@@ -21,6 +22,7 @@ from ..schemas import (
     StockGroupBulkAddBySymbols,
     StockGroupCreate,
     StockGroupDetail,
+    StockGroupMemberRead,
     StockGroupMembersUpdate,
     StockGroupRead,
     StockImportSummary,
@@ -50,6 +52,111 @@ def _detect_delimiter(text: str) -> str:
     # Fallback to comma; the csv module will then treat the entire line as
     # a single field if the guess is wrong, which we handle downstream.
     return ","
+
+
+def _build_group_detail(group: StockGroup, db: Session) -> StockGroupDetail:
+    """Construct a StockGroupDetail with allocation metadata."""
+
+    rows = (
+        db.query(StockGroupMember, Stock)
+        .join(Stock, Stock.id == StockGroupMember.stock_id)
+        .filter(StockGroupMember.group_id == group.id)
+        .order_by(Stock.symbol.asc())
+        .all()
+    )
+
+    members: list[StockGroupMemberRead] = []
+    for membership, stock in rows:
+        base = StockRead.model_validate(stock)
+        members.append(
+            StockGroupMemberRead(
+                **base.model_dump(),
+                stock_id=stock.id,
+                target_weight_pct=membership.target_weight_pct,
+                target_qty=membership.target_qty,
+                target_amount=membership.target_amount,
+            )
+        )
+
+    return StockGroupDetail(
+        id=group.id,
+        code=group.code,
+        name=group.name,
+        description=group.description,
+        tags=group.tags or [],
+        composition_mode=GroupCompositionMode(group.composition_mode),
+        total_investable_amount=group.total_investable_amount,
+        created_at=group.created_at,
+        updated_at=group.updated_at,
+        stock_count=len(members),
+        members=members,
+    )
+
+
+def _equalise_group_allocations(
+    db: Session,
+    group: StockGroup,
+    *,
+    total_investable_amount_override: float | None = None,
+) -> None:
+    """Apply equal allocations across all members for the group's mode."""
+
+    memberships = (
+        db.query(StockGroupMember)
+        .filter(StockGroupMember.group_id == group.id)
+        .order_by(StockGroupMember.id.asc())
+        .all()
+    )
+    if not memberships:
+        return
+
+    try:
+        mode = GroupCompositionMode(group.composition_mode)
+    except ValueError:
+        mode = GroupCompositionMode.WEIGHTS
+
+    if mode is GroupCompositionMode.WEIGHTS:
+        count = len(memberships)
+        base = Decimal("100") / Decimal(count)
+        acc = Decimal("0")
+        for idx, membership in enumerate(memberships):
+            if idx == count - 1:
+                value = Decimal("100") - acc
+            else:
+                value = base.quantize(Decimal("0.01"))
+                acc += value
+            membership.target_weight_pct = value
+            membership.target_qty = None
+            membership.target_amount = None
+    elif mode is GroupCompositionMode.QTY:
+        for membership in memberships:
+            if membership.target_qty is None or membership.target_qty <= 0:
+                membership.target_qty = Decimal("1")
+            membership.target_weight_pct = None
+            membership.target_amount = None
+    elif mode is GroupCompositionMode.AMOUNT:
+        total_raw = (
+            total_investable_amount_override
+            if total_investable_amount_override is not None
+            else group.total_investable_amount
+        )
+        if total_raw is None:
+            return
+        total = Decimal(str(total_raw))
+        count = len(memberships)
+        base = total / Decimal(count)
+        acc = Decimal("0")
+        for idx, membership in enumerate(memberships):
+            if idx == count - 1:
+                value = total - acc
+            else:
+                value = base.quantize(Decimal("0.01"))
+                acc += value
+            membership.target_amount = value
+            membership.target_weight_pct = None
+            membership.target_qty = None
+
+    db.commit()
 
 
 def _classify_segment_from_market_cap(value_raw: float | None) -> str | None:
@@ -304,7 +411,6 @@ async def create_stock_group(
     db.commit()
     db.refresh(group)
 
-    members: List[Stock] = []
     if payload.stock_ids:
         for stock_id in payload.stock_ids:
             stock = db.get(Stock, stock_id)
@@ -322,25 +428,10 @@ async def create_stock_group(
                 .first()
             )
             if link_exists is None:
-                db.add(
-                    StockGroupMember(group_id=group.id, stock_id=stock.id),
-                )
-            members.append(stock)
+                db.add(StockGroupMember(group_id=group.id, stock_id=stock.id))
         db.commit()
 
-    return StockGroupDetail(
-        id=group.id,
-        code=group.code,
-        name=group.name,
-        description=group.description,
-        tags=group.tags or [],
-        composition_mode=GroupCompositionMode(group.composition_mode),
-        total_investable_amount=group.total_investable_amount,
-        created_at=group.created_at,
-        updated_at=group.updated_at,
-        stock_count=len(members),
-        members=[StockRead.model_validate(s) for s in members],
-    )
+    return _build_group_detail(group, db)
 
 
 @router.get("/stock-groups/{group_id}", response_model=StockGroupDetail)
@@ -349,31 +440,7 @@ async def get_stock_group(
     db: Session = Depends(get_db),
 ) -> StockGroupDetail:
     group = _get_group_or_404(db, group_id)
-    memberships = (
-        db.query(StockGroupMember).filter(StockGroupMember.group_id == group.id).all()
-    )
-    member_ids = [m.stock_id for m in memberships]
-    members: List[Stock] = []
-    if member_ids:
-        members = (
-            db.query(Stock)
-            .filter(Stock.id.in_(member_ids))  # type: ignore[arg-type]
-            .order_by(Stock.symbol.asc())
-            .all()
-        )
-    return StockGroupDetail(
-        id=group.id,
-        code=group.code,
-        name=group.name,
-        description=group.description,
-        tags=group.tags or [],
-        composition_mode=GroupCompositionMode(group.composition_mode),
-        total_investable_amount=group.total_investable_amount,
-        created_at=group.created_at,
-        updated_at=group.updated_at,
-        stock_count=len(memberships),
-        members=[StockRead.model_validate(s) for s in members],
-    )
+    return _build_group_detail(group, db)
 
 
 @router.put("/stock-groups/{group_id}", response_model=StockGroupRead)
@@ -635,6 +702,28 @@ async def bulk_add_group_members_by_symbols(
             seen_stock_ids.add(stock.id)
 
     db.commit()
+
+    # After ensuring membership links exist, equalise allocations across all
+    # members according to the group's composition mode. When the caller
+    # supplies an explicit mode or total amount, prefer those hints.
+    try:
+        effective_mode = payload.mode or GroupCompositionMode(group.composition_mode)
+    except ValueError:  # pragma: no cover - defensive fallback
+        effective_mode = GroupCompositionMode.WEIGHTS
+    if effective_mode is GroupCompositionMode.AMOUNT:
+        override_total = (
+            float(payload.total_investable_amount)
+            if payload.total_investable_amount is not None
+            else None
+        )
+        _equalise_group_allocations(
+            db,
+            group,
+            total_investable_amount_override=override_total,
+        )
+    else:
+        _equalise_group_allocations(db, group)
+
     return {"added": added}
 
 

@@ -296,6 +296,18 @@ class StockRead(StockBase):
     model_config = SettingsConfigDict(from_attributes=True)
 
 
+class StockGroupMemberRead(StockRead):
+    """Stock in a group, including target allocation fields."""
+
+    stock_id: int | None = Field(
+        default=None,
+        description="Optional explicit stock id for this membership (matches id).",
+    )
+    target_weight_pct: Decimal | None = None
+    target_qty: Decimal | None = None
+    target_amount: Decimal | None = None
+
+
 class StockGroupBase(BaseModel):
     """Common fields for stock groups."""
 
@@ -358,7 +370,7 @@ class StockGroupRead(StockGroupBase):
 class StockGroupDetail(StockGroupRead):
     """Stock group including full member details."""
 
-    members: list[StockRead]
+    members: list[StockGroupMemberRead]
 
 
 class StockGroupMembersUpdate(BaseModel):
@@ -388,6 +400,20 @@ class StockGroupBulkAddBySymbols(BaseModel):
         ...,
         description="Symbol codes to add as members of this group",
         min_length=1,
+    )
+
+    # Optional hints for how allocations should be interpreted when
+    # equalising group members. When omitted, the group's existing mode
+    # and total_investable_amount are used.
+    mode: GroupCompositionMode | None = Field(
+        default=None,
+        description="Optional composition mode override for this bulk add.",
+    )
+    total_investable_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Optional total investable amount to use when " "composition_mode='amount'."
+        ),
     )
 
 

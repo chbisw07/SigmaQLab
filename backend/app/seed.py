@@ -242,9 +242,10 @@ def seed_example_stock_groups(session: Session) -> None:
             session.commit()
             session.refresh(group)
         else:
-            # Ensure composition metadata is populated for existing rows.
+            # Ensure composition metadata is populated for existing rows and
+            # stays in sync with the config.
             updated = False
-            if not getattr(group, "composition_mode", None):
+            if getattr(group, "composition_mode", None) != cfg["composition_mode"]:
                 group.composition_mode = cfg["composition_mode"]
                 updated = True
             if (
