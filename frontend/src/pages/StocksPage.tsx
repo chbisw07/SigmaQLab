@@ -48,6 +48,7 @@ export const StocksPage = () => {
   const [searchText, setSearchText] = useState("");
   const [exchangeFilter, setExchangeFilter] = useState<string>("all");
   const [sectorFilter, setSectorFilter] = useState<string>("all");
+  const [analystRatingFilter, setAnalystRatingFilter] = useState<string>("all");
   const [selectedStockIds, setSelectedStockIds] = useState<number[]>([]);
   const [selectedStockId, setSelectedStockId] = useState<number | null>(null);
   const [stockDialogOpen, setStockDialogOpen] = useState(false);
@@ -438,6 +439,12 @@ export const StocksPage = () => {
             return false;
           }
         }
+        if (analystRatingFilter !== "all") {
+          const rating = (s.analyst_rating ?? "").trim();
+          if (!rating || rating !== analystRatingFilter) {
+            return false;
+          }
+        }
         if (searchText.trim()) {
           const q = searchText.trim().toLowerCase();
           const symbolMatch = s.symbol.toLowerCase().includes(q);
@@ -448,7 +455,7 @@ export const StocksPage = () => {
         }
         return true;
       }),
-    [stocks, showInactive, exchangeFilter, sectorFilter, searchText]
+    [stocks, showInactive, exchangeFilter, sectorFilter, analystRatingFilter, searchText]
   );
 
   const exchangeOptions = useMemo(
@@ -469,6 +476,18 @@ export const StocksPage = () => {
         new Set(
           stocks
             .map((s) => (s.sector ?? "").trim())
+            .filter((value) => value.length > 0)
+        )
+      ).sort(),
+    [stocks]
+  );
+
+  const analystRatingOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          stocks
+            .map((s) => (s.analyst_rating ?? "").trim())
             .filter((value) => value.length > 0)
         )
       ).sort(),
@@ -762,6 +781,23 @@ export const StocksPage = () => {
                   {sectorOptions.map((sec) => (
                     <MenuItem key={sec} value={sec}>
                       {sec}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <TextField
+                  label="Analyst rating"
+                  size="small"
+                  select
+                  fullWidth
+                  value={analystRatingFilter}
+                  onChange={(e) => setAnalystRatingFilter(e.target.value)}
+                >
+                  <MenuItem value="all">All ratings</MenuItem>
+                  {analystRatingOptions.map((rating) => (
+                    <MenuItem key={rating} value={rating}>
+                      {rating}
                     </MenuItem>
                   ))}
                 </TextField>
