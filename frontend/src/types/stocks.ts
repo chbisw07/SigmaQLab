@@ -7,6 +7,8 @@ export type Stock = {
   market_cap_crore?: number | null;
   sector?: string | null;
   tags?: string[] | null;
+  analyst_rating?: string | null;
+  target_price_one_year?: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;

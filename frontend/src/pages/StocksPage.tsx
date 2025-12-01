@@ -483,6 +483,12 @@ export const StocksPage = () => {
       minWidth: 120
     },
     {
+      field: "name",
+      headerName: "Name",
+      flex: 1.5,
+      minWidth: 160
+    },
+    {
       field: "exchange",
       headerName: "Exchange",
       width: 100
@@ -508,22 +514,30 @@ export const StocksPage = () => {
       width: 130
     },
     {
-      field: "name",
-      headerName: "Name",
-      flex: 1.5,
-      minWidth: 160
-    },
-    {
       field: "sector",
       headerName: "Sector",
       flex: 1,
       minWidth: 140
     },
     {
-      field: "tags",
-      headerName: "Tags",
+      field: "analyst_rating",
+      headerName: "Analyst rating",
       flex: 1,
       minWidth: 160
+    },
+    {
+      field: "target_price_one_year",
+      headerName: "Target price 1 year (₹)",
+      width: 190,
+      renderCell: (params) => {
+        const row = params.row as Stock | undefined;
+        const value = row?.target_price_one_year;
+        if (value == null || Number.isNaN(value)) return "";
+        return value.toLocaleString("en-IN", {
+          maximumFractionDigits: 2,
+          minimumFractionDigits: 0
+        });
+      }
     },
     {
       field: "is_active",

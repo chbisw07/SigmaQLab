@@ -1,3 +1,4 @@
+import re
 from typing import List
 
 from fastapi import (
@@ -149,6 +150,8 @@ async def create_stock(
         segment=payload.segment,
         name=payload.name,
         sector=payload.sector,
+        analyst_rating=payload.analyst_rating,
+        target_price_one_year=payload.target_price_one_year,
         tags=payload.tags,
         is_active=payload.is_active,
     )
@@ -206,6 +209,10 @@ async def update_stock(
         stock.market_cap_crore = update_data["market_cap_crore"]
     if "tags" in update_data:
         stock.tags = update_data["tags"]
+    if "analyst_rating" in update_data:
+        stock.analyst_rating = update_data["analyst_rating"]
+    if "target_price_one_year" in update_data:
+        stock.target_price_one_year = update_data["target_price_one_year"]
     if "is_active" in update_data and update_data["is_active"] is not None:
         stock.is_active = bool(update_data["is_active"])
 
@@ -696,13 +703,25 @@ async def import_tradingview_screener(
     symbol_idx = -1
     mcap_idx = -1
     sector_idx = -1
+    description_idx = -1
+    analyst_rating_idx = -1
+    target_price_idx = -1
     for idx, name in enumerate(header_lower):
+        normalized = re.sub(r"[^a-z0-9]", "", name)
         if name in {"ticker", "symbol", "nse code", "nse_code"}:
             symbol_idx = idx
         elif name == "market capitalization":
             mcap_idx = idx
         elif name == "sector":
             sector_idx = idx
+        elif name in {"description", "name"}:
+            description_idx = idx
+        elif name == "analyst rating":
+            analyst_rating_idx = idx
+        elif "currency" not in normalized and (
+            normalized.startswith("targetprice1year") or "targetprice" in normalized
+        ):
+            target_price_idx = idx
     if symbol_idx == -1:
         raise HTTPException(
             status_code=400,
@@ -789,6 +808,28 @@ async def import_tradingview_screener(
             )
             continue
 
+        analyst_rating_value: str | None = None
+        if 0 <= analyst_rating_idx < len(row):
+            rating_raw = row[analyst_rating_idx].strip()
+            if rating_raw:
+                analyst_rating_value = rating_raw
+
+        description_value: str | None = None
+        if 0 <= description_idx < len(row):
+            desc_raw = row[description_idx].strip()
+            if desc_raw:
+                description_value = desc_raw
+
+        target_price_value: float | None = None
+        if 0 <= target_price_idx < len(row):
+            raw_target = row[target_price_idx].strip()
+            if raw_target:
+                cleaned = re.sub(r"[^0-9.\-]", "", raw_target.replace(",", ""))
+                try:
+                    target_price_value = float(cleaned)
+                except ValueError:
+                    target_price_value = None
+
         stock = (
             db.query(Stock)
             .filter(
@@ -804,8 +845,10 @@ async def import_tradingview_screener(
                 exchange=resolved.exchange,
                 segment=segment_value,
                 market_cap_crore=market_cap_crore,
-                name=None,
+                name=description_value,
                 sector=sector_value,
+                analyst_rating=analyst_rating_value,
+                target_price_one_year=target_price_value,
                 tags=None,
                 is_active=bool(mark_active),
             )
@@ -1062,8 +1105,8 @@ async def import_portfolio_csv(
                 stock.market_cap_crore = market_cap_crore
             if mark_active and not stock.is_active:
                 stock.is_active = True
-                db.add(stock)
-                db.commit()
+            db.add(stock)
+            db.commit()
             updated += 1
 
         link_exists = (

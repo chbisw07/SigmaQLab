@@ -241,6 +241,14 @@ class StockBase(BaseModel):
         default=None,
         description="Optional list of tags, e.g. ['bank', 'nifty50', 'midcap']",
     )
+    analyst_rating: str | None = Field(
+        default=None,
+        description="Analyst/fundamental rating string imported from TradingView.",
+    )
+    target_price_one_year: float | None = Field(
+        default=None,
+        description="Target price for the next 12 months (TradingView column).",
+    )
     is_active: bool = Field(
         default=True,
         description="Whether the stock is active in the research universe",
@@ -263,6 +271,8 @@ class StockUpdate(BaseModel):
     market_cap_crore: float | None = None
     sector: str | None = None
     tags: list[str] | None = None
+    analyst_rating: str | None = None
+    target_price_one_year: float | None = None
     is_active: bool | None = None
 
 

@@ -97,9 +97,14 @@ def ensure_meta_schema_migrations() -> None:
     # Stocks: optional market cap in INR crores.
     if "stocks" in tables:
         columns = {col["name"] for col in inspector.get_columns("stocks")}
-        if "market_cap_crore" not in columns:
+        new_cols = {
+            "market_cap_crore": "FLOAT",
+            "analyst_rating": "VARCHAR",
+            "target_price_one_year": "FLOAT",
+        }
+        missing = {name: ddl for name, ddl in new_cols.items() if name not in columns}
+        if missing:
             with engine.connect() as conn:
-                conn.execute(
-                    text("ALTER TABLE stocks ADD COLUMN market_cap_crore FLOAT")
-                )
+                for name, ddl in missing.items():
+                    conn.execute(text(f"ALTER TABLE stocks ADD COLUMN {name} {ddl}"))
                 conn.commit()

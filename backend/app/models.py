@@ -167,6 +167,8 @@ class Stock(Base):
     name = Column(String, nullable=True)
     sector = Column(String, nullable=True)
     tags = Column(JSON, nullable=True)
+    analyst_rating = Column(String, nullable=True)
+    target_price_one_year = Column(Float, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(
         DateTime,
