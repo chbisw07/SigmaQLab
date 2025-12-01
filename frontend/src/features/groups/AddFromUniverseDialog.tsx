@@ -22,7 +22,12 @@ const columns: GridColDef[] = [
   { field: "symbol", headerName: "Symbol", width: 120 },
   { field: "exchange", headerName: "Exchange", width: 120 },
   { field: "sector", headerName: "Sector", flex: 1, minWidth: 140 },
-  { field: "name", headerName: "Name", flex: 1.2, minWidth: 180 }
+  {
+    field: "analyst_rating",
+    headerName: "Analyst rating",
+    width: 160
+  },
+  { field: "name", headerName: "Name", flex: 1.4, minWidth: 200 }
 ];
 
 export const AddFromUniverseDialog = ({

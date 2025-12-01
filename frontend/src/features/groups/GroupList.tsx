@@ -15,6 +15,8 @@ type GroupListProps = {
   loading: boolean;
   activeGroupCode: string | null;
   onSelectGroup: (code: string | null) => void;
+  selectedCodes: string[];
+  onSelectionChange: (codes: string[]) => void;
 };
 
 const columns: GridColDef[] = [
@@ -39,7 +41,9 @@ export const GroupList = ({
   groups,
   loading,
   activeGroupCode,
-  onSelectGroup
+  onSelectGroup,
+  selectedCodes,
+  onSelectionChange
 }: GroupListProps) => {
   const [search, setSearch] = useState("");
 
@@ -74,16 +78,16 @@ export const GroupList = ({
             density="compact"
             autoHeight={filtered.length === 0}
             getRowId={(row) => row.code}
-            rowSelectionModel={activeGroupCode ? [activeGroupCode] : []}
-            onRowSelectionModelChange={(model) => {
-              const nextCode = model[0] as string | undefined;
-              onSelectGroup(nextCode ?? null);
-            }}
+            checkboxSelection
+            rowSelectionModel={selectedCodes}
             onRowClick={(params) => {
               const code = params.row?.code;
               if (typeof code === "string") {
                 onSelectGroup(code);
               }
+            }}
+            onRowSelectionModelChange={(model) => {
+              onSelectionChange(model as string[]);
             }}
             sx={{
               minHeight: 320,

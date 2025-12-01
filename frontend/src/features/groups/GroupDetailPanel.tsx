@@ -32,6 +32,7 @@ type GroupDetailPanelProps = {
   group: StockGroupSummary | null;
   onGroupUpdated: () => void;
   onEditGroup: (group: StockGroupSummary) => void;
+  onDeleteGroup: (group: StockGroupSummary) => void;
   stocks: Stock[];
 };
 
@@ -42,6 +43,7 @@ export const GroupDetailPanel = ({
   group,
   onGroupUpdated,
   onEditGroup,
+  onDeleteGroup,
   stocks
 }: GroupDetailPanelProps) => {
   const [detail, setDetail] = useState<StockGroupDetail | null>(null);
@@ -176,22 +178,25 @@ export const GroupDetailPanel = ({
 
   const handleRemoveSelected = async () => {
     if (!detail || selectionModel.length === 0) return;
-    const memberIds = selectionModel.map((id) => Number(id));
+    const stockIds = selectionModel.map((id) => Number(id));
     try {
-      const res = await fetch(
-        `${apiBase}/api/stock-groups/${detail.code}/members/bulk-remove`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ member_ids: memberIds })
-        }
+      const responses = await Promise.all(
+        stockIds.map((stockId) =>
+          fetch(
+            `${apiBase}/api/stock-groups/${detail.id}/members/${stockId}`,
+            {
+              method: "DELETE"
+            }
+          )
+        )
       );
-      if (!res.ok) {
+      const failed = responses.find((res) => !res.ok);
+      if (failed) {
         throw new Error("Failed to remove selected members.");
       }
       setActionMessage({
         type: "success",
-        text: `Removed ${memberIds.length} member(s).`
+        text: `Removed ${stockIds.length} member(s).`
       });
       await refreshDetail();
       setSelectionModel([]);
@@ -353,7 +358,12 @@ export const GroupDetailPanel = ({
     return [
       { field: "symbol", headerName: "Symbol", width: 110 },
       { field: "name", headerName: "Name", flex: 1, minWidth: 150 },
-      { field: "sector", headerName: "Sector", width: 140 },
+      { field: "sector", headerName: "Sector", width: 160 },
+      {
+        field: "analyst_rating",
+        headerName: "Analyst rating",
+        width: 140
+      },
       {
         field: targetField,
         headerName: targetHeader,
@@ -410,9 +420,19 @@ export const GroupDetailPanel = ({
               </Typography>
             )}
           </Box>
-          <Button variant="outlined" size="small" onClick={() => onEditGroup(group)}>
-            Edit group
-          </Button>
+          <Stack direction="row" spacing={1}>
+            <Button variant="outlined" size="small" onClick={() => onEditGroup(group)}>
+              Edit group
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              color="error"
+              onClick={() => onDeleteGroup(group)}
+            >
+              Delete
+            </Button>
+          </Stack>
         </Stack>
 
         <Tabs

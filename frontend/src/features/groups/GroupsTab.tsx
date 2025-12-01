@@ -41,6 +41,7 @@ export const GroupsTab = ({
   const [editingGroup, setEditingGroup] = useState<StockGroupSummary | null>(null);
   const [formState, setFormState] = useState<FetchState>("idle");
   const [formMessage, setFormMessage] = useState<string | null>(null);
+  const [selectedGroupCodes, setSelectedGroupCodes] = useState<string[]>([]);
 
   const activeGroup = useMemo(
     () => groups.find((g) => g.code === activeGroupCode) ?? null,
@@ -109,24 +110,109 @@ export const GroupsTab = ({
     }
   };
 
+  const clearSelectionAndActive = () => {
+    setSelectedGroupCodes([]);
+    onGroupSelectionChange(null);
+  };
+
+  const handleDeleteGroup = async (group: StockGroupSummary) => {
+    if (
+      !window.confirm(
+        `Delete group '${group.code}'? This will remove its members but not delete stocks.`
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await fetch(`${apiBase}/api/stock-groups/${group.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        throw new Error("Failed to delete group.");
+      }
+      await onRefreshGroups();
+      clearSelectionAndActive();
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      window.alert(
+        err instanceof Error ? err.message : "Unable to delete group. Try again."
+      );
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedGroupCodes.length === 0) return;
+    const toDelete = groups.filter((g) => selectedGroupCodes.includes(g.code));
+    if (toDelete.length === 0) {
+      clearSelectionAndActive();
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete ${toDelete.length} group(s)? This will remove their members but not delete stocks.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await Promise.all(
+        toDelete.map(async (g) => {
+          const res = await fetch(`${apiBase}/api/stock-groups/${g.id}`, {
+            method: "DELETE"
+          });
+          if (!res.ok && res.status !== 204) {
+            throw new Error(`Failed to delete group ${g.code}.`);
+          }
+        })
+      );
+      await onRefreshGroups();
+      clearSelectionAndActive();
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      window.alert(
+        err instanceof Error
+          ? err.message
+          : "Unable to delete one or more groups. Try again."
+      );
+    }
+  };
+
   return (
     <Box>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={2}
-        spacing={2}
-      >
-        <Box>
-          <Typography variant="h5">Stock groups (baskets)</Typography>
-          <Typography variant="body2" color="text.secondary">
-            Define baskets of stocks for backtests and portfolios.
+      <Stack spacing={1.5} mb={2}>
+        <Stack
+          direction="row"
+          justifyContent="space-between"
+          alignItems="center"
+          spacing={2}
+        >
+          <Box>
+            <Typography variant="h5">Stock groups (baskets)</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Define baskets of stocks for backtests and portfolios.
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1} alignItems="center">
+            {selectedGroupCodes.length > 0 && (
+              <Button
+                size="small"
+                color="error"
+                variant="outlined"
+                onClick={() => void handleDeleteSelected()}
+              >
+                Delete selected
+              </Button>
+            )}
+            <Button variant="contained" size="small" onClick={openCreateDialog}>
+              New group
+            </Button>
+          </Stack>
+        </Stack>
+        {selectedGroupCodes.length > 0 && (
+          <Typography variant="body2">
+            {selectedGroupCodes.length} group(s) selected
           </Typography>
-        </Box>
-        <Button variant="contained" size="small" onClick={openCreateDialog}>
-          New group
-        </Button>
+        )}
       </Stack>
 
       {groupsError && (
@@ -136,20 +222,23 @@ export const GroupsTab = ({
       )}
 
       <Grid container spacing={2}>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={5}>
           <GroupList
             groups={groups}
             loading={groupsState === "loading"}
             activeGroupCode={activeGroupCode}
             onSelectGroup={(code) => onGroupSelectionChange(code)}
+            selectedCodes={selectedGroupCodes}
+            onSelectionChange={setSelectedGroupCodes}
           />
         </Grid>
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12} md={7}>
           <GroupDetailPanel
             apiBase={apiBase}
             group={activeGroup}
             onGroupUpdated={onRefreshGroups}
             onEditGroup={openEditDialog}
+             onDeleteGroup={handleDeleteGroup}
             stocks={stocks}
           />
         </Grid>
