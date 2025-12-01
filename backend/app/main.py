@@ -6,6 +6,7 @@ from .config import Settings, get_settings
 from .database import Base, SessionLocal, engine, ensure_meta_schema_migrations, get_db
 from .logging_config import configure_logging
 from .prices_database import PricesBase, ensure_schema_migrations, prices_engine
+from .routers import analytics as analytics_router
 from .routers import backtests as backtests_router
 from .routers import data as data_router
 from .routers import portfolios as portfolios_router
@@ -64,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(factors_router.router)
     app.include_router(screener_router.router)
     app.include_router(portfolio_opt_router.router)
+    app.include_router(analytics_router.router)
 
     return app
 

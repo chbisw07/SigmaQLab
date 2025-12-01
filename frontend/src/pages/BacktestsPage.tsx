@@ -240,6 +240,19 @@ export const BacktestsPage = () => {
   const [indicators, setIndicators] = useState<
     Record<string, { timestamp: string; value: number }[]>
   >({});
+  const [factorSeries, setFactorSeries] = useState<
+    {
+      date: string;
+      value?: number | null;
+      quality?: number | null;
+      momentum?: number | null;
+      low_vol?: number | null;
+      size?: number | null;
+    }[]
+  >([]);
+  const [sectorSeries, setSectorSeries] = useState<
+    { date: string; sector: string; weight: number }[]
+  >([]);
 
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
@@ -825,6 +838,8 @@ export const BacktestsPage = () => {
     setEquity([]);
     setTrades([]);
     setParamDetail(null);
+    setFactorSeries([]);
+    setSectorSeries([]);
 
     try {
       const chartRes = await fetch(
@@ -846,6 +861,36 @@ export const BacktestsPage = () => {
           showVolume: vc.showVolume ?? true,
           showEquityCurve: vc.showEquityCurve ?? true
         });
+      }
+
+      // Factor and sector analytics (if available).
+      try {
+        const [fRes, sRes] = await Promise.all([
+          fetch(`${API_BASE}/api/backtests/${backtest.id}/factor-exposures`),
+          fetch(`${API_BASE}/api/backtests/${backtest.id}/sector-exposures`)
+        ]);
+        if (fRes.ok) {
+          const fData = (await fRes.json()) as {
+            date: string;
+            value?: number | null;
+            quality?: number | null;
+            momentum?: number | null;
+            low_vol?: number | null;
+            size?: number | null;
+          }[];
+          setFactorSeries(fData);
+        }
+        if (sRes.ok) {
+          const sData = (await sRes.json()) as {
+            date: string;
+            sector: string;
+            weight: number;
+          }[];
+          setSectorSeries(sData);
+        }
+      } catch {
+        setFactorSeries([]);
+        setSectorSeries([]);
       }
 
       if (backtest.params_id != null) {
@@ -1941,6 +1986,59 @@ export const BacktestsPage = () => {
                   <Typography variant="body2">
                     Avg loss: {formatNumber(selectedBacktest.metrics.avg_loss)}
                   </Typography>
+                  <Box mt={2}>
+                    <Card variant="outlined">
+                      <CardContent>
+                        {(() => {
+                          const m = selectedBacktest
+                            .metrics as Record<string, unknown>;
+                          const vol =
+                            (m.volatility as number | undefined) ??
+                            (m.annual_volatility as number | undefined) ??
+                            0;
+                          const sharpe =
+                            (m.sharpe as number | undefined) ??
+                            (m.sharpe_ratio as number | undefined) ??
+                            0;
+                          const sortino =
+                            (m.sortino as number | undefined) ??
+                            (m.sortino_ratio as number | undefined) ??
+                            0;
+                          const maxDd =
+                            (m.max_drawdown as number | undefined) ?? 0;
+                          const annualReturn =
+                            (m.annual_return as number | undefined) ?? 0;
+
+                          return (
+                            <>
+                              <Typography
+                                variant="subtitle2"
+                                color="textSecondary"
+                                gutterBottom
+                              >
+                                Risk snapshot
+                              </Typography>
+                              <Typography variant="body2">
+                                Volatility: {vol.toFixed(4)}
+                              </Typography>
+                              <Typography variant="body2">
+                                Sharpe: {sharpe.toFixed(3)}
+                              </Typography>
+                              <Typography variant="body2">
+                                Sortino: {sortino.toFixed(3)}
+                              </Typography>
+                              <Typography variant="body2">
+                                Max drawdown: {formatPercent(maxDd)}
+                              </Typography>
+                              <Typography variant="body2">
+                                Annual return: {formatPercent(annualReturn)}
+                              </Typography>
+                            </>
+                          );
+                        })()}
+                      </CardContent>
+                    </Card>
+                  </Box>
                   {paramDetail && (
                     <Box mt={2}>
                       <Typography variant="subtitle2" gutterBottom>
@@ -2135,6 +2233,84 @@ export const BacktestsPage = () => {
                         showEquityCurve={visualSettings.showEquityCurve ?? true}
                       />
                     </Box>
+                  )}
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Factor &amp; sector analytics
+                  </Typography>
+                  {factorSeries.length === 0 && sectorSeries.length === 0 ? (
+                    <Typography variant="body2" color="textSecondary">
+                      Factor and sector analytics will appear here when
+                      exposures are available for this backtest.
+                    </Typography>
+                  ) : (
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="caption" color="textSecondary">
+                          Factor tilt over time
+                        </Typography>
+                        <Box sx={{ height: 220 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={factorSeries}>
+                              <XAxis dataKey="date" hide />
+                              <YAxis />
+                              <RechartsTooltip />
+                              <Line
+                                type="monotone"
+                                dataKey="value"
+                                stroke="#1976d2"
+                                dot={false}
+                                name="Value"
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="quality"
+                                stroke="#388e3c"
+                                dot={false}
+                                name="Quality"
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </Box>
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <Typography variant="caption" color="textSecondary">
+                          Sector allocation (latest)
+                        </Typography>
+                        <Box sx={{ height: 220 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={(() => {
+                                  if (sectorSeries.length === 0) return [];
+                                  const latestDate =
+                                    sectorSeries[sectorSeries.length - 1]?.date;
+                                  const bySector: Record<string, number> = {};
+                                  sectorSeries.forEach((row) => {
+                                    if (row.date !== latestDate) return;
+                                    bySector[row.sector] =
+                                      (bySector[row.sector] ?? 0) +
+                                      row.weight;
+                                  });
+                                  return Object.entries(bySector).map(
+                                    ([name, value]) => ({ name, value })
+                                  );
+                                })()}
+                                dataKey="value"
+                                nameKey="name"
+                                cx="50%"
+                                cy="50%"
+                                outerRadius={80}
+                                label
+                              />
+                              <RechartsTooltip />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </Box>
+                      </Grid>
+                    </Grid>
                   )}
                 </Grid>
 

@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 
 from ..backtest_service import BacktestService
 from ..database import get_db
-from ..models import Backtest, BacktestEquityPoint, BacktestTrade, Strategy
+from ..models import (
+    Backtest,
+    BacktestEquityPoint,
+    BacktestTrade,
+    PortfolioBacktest,
+    Strategy,
+)
 from ..prices_database import get_prices_db
 from ..prices_models import PriceBar
 from ..schemas import (
@@ -15,10 +21,13 @@ from ..schemas import (
     BacktestChartDataResponse,
     BacktestChartPriceBar,
     BacktestEquityPointRead,
+    BacktestFactorExposurePoint,
     BacktestRead,
+    BacktestSectorExposurePoint,
     BacktestTradeRead,
 )
 from ..schemas_backtest_settings import BacktestSettingsUpdate
+from ..services import AnalyticsService
 
 router = APIRouter(prefix="/api/backtests", tags=["Backtests"])
 
@@ -542,6 +551,42 @@ async def get_backtest_chart_data(
         projection_curve=projection_curve,
         trades=[BacktestTradeRead.model_validate(t) for t in trades],
     )
+
+
+@router.get(
+    "/{backtest_id}/factor-exposures",
+    response_model=List[BacktestFactorExposurePoint],
+)
+async def get_backtest_factor_exposures(
+    backtest_id: int,
+    meta_db: Session = Depends(get_db),
+) -> List[BacktestFactorExposurePoint]:
+    """Return factor exposure time series for a portfolio backtest."""
+
+    bt = meta_db.get(PortfolioBacktest, backtest_id)
+    if bt is None:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    service = AnalyticsService()
+    items = service.get_factor_exposures(meta_db, backtest_id=backtest_id)
+    return [BacktestFactorExposurePoint.model_validate(item) for item in items]
+
+
+@router.get(
+    "/{backtest_id}/sector-exposures",
+    response_model=List[BacktestSectorExposurePoint],
+)
+async def get_backtest_sector_exposures(
+    backtest_id: int,
+    meta_db: Session = Depends(get_db),
+) -> List[BacktestSectorExposurePoint]:
+    """Return sector allocation time series for a portfolio backtest."""
+
+    bt = meta_db.get(PortfolioBacktest, backtest_id)
+    if bt is None:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    service = AnalyticsService()
+    items = service.get_sector_exposures(meta_db, backtest_id=backtest_id)
+    return [BacktestSectorExposurePoint.model_validate(item) for item in items]
 
 
 @router.get("/{backtest_id}/trades/export")

@@ -162,6 +162,9 @@ export const PortfolioDetailPage = () => {
   );
   const [selectedBacktest, setSelectedBacktest] =
     useState<PortfolioBacktest | null>(null);
+  const [riskSummary, setRiskSummary] = useState<Record<string, unknown> | null>(
+    null
+  );
 
   // Settings tab state
   const [name, setName] = useState("");
@@ -324,6 +327,29 @@ export const PortfolioDetailPage = () => {
     };
     void load();
   }, [id, isNew]);
+
+  useEffect(() => {
+    const loadSummary = async () => {
+      if (!selectedBacktest) {
+        setRiskSummary(null);
+        return;
+      }
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/v1/analytics/summary/${selectedBacktest.id}`
+        );
+        if (!res.ok) {
+          setRiskSummary(null);
+          return;
+        }
+        const data = (await res.json()) as Record<string, unknown>;
+        setRiskSummary(data);
+      } catch {
+        setRiskSummary(null);
+      }
+    };
+    void loadSummary();
+  }, [selectedBacktest]);
 
   const handleTabChange = (
     _event: SyntheticEvent,
@@ -692,6 +718,15 @@ export const PortfolioDetailPage = () => {
       (metrics.volatility as number | undefined) ??
       (metrics.annual_volatility as number | undefined) ??
       0;
+    const summary = riskSummary as Record<string, unknown> | null;
+    const summaryVol =
+      (summary?.volatility as number | undefined) ?? vol;
+    const summarySharpe =
+      (summary?.sharpe as number | undefined) ?? sharpe;
+    const summaryBeta =
+      (summary?.beta as number | undefined) ?? 0;
+    const summaryCvar =
+      (summary?.cvar_95 as number | undefined) ?? 0;
     const beta =
       (metrics.beta as number | undefined) ?? 0;
 
@@ -779,6 +814,31 @@ export const PortfolioDetailPage = () => {
                 </Typography>
                 <Typography variant="h6">
                   {sharpe.toFixed(2)} / {vol.toFixed(4)} / {beta.toFixed(2)}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
+        {/* Risk snapshot card powered by analytics summary */}
+        <Grid container spacing={2} sx={{ mb: 2 }}>
+          <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Risk snapshot (latest)
+                </Typography>
+                <Typography variant="body2">
+                  Vol: {summaryVol.toFixed(4)}
+                </Typography>
+                <Typography variant="body2">
+                  Sharpe: {summarySharpe.toFixed(3)}
+                </Typography>
+                <Typography variant="body2">
+                  Beta: {summaryBeta.toFixed(3)}
+                </Typography>
+                <Typography variant="body2">
+                  CVaR (95%): {(summaryCvar * 100).toFixed(2)}%
                 </Typography>
               </CardContent>
             </Card>
@@ -1709,6 +1769,56 @@ export const PortfolioDetailPage = () => {
     const beta = (metrics.beta as number | undefined) ?? 0;
     const cvar95 = (metrics.cvar_95 as number | undefined) ?? 0;
 
+    const [factorSeries, setFactorSeries] = useState<
+      { date: string; value?: number | null; quality?: number | null; momentum?: number | null; low_vol?: number | null; size?: number | null }[]
+    >([]);
+    const [sectorSeries, setSectorSeries] = useState<
+      { date: string; sector: string; weight: number }[]
+    >([]);
+
+    useEffect(() => {
+      const loadAnalyticsSeries = async () => {
+        if (!selectedBacktest) {
+          setFactorSeries([]);
+          setSectorSeries([]);
+          return;
+        }
+        try {
+          const [fRes, sRes] = await Promise.all([
+            fetch(`${API_BASE}/api/backtests/${selectedBacktest.id}/factor-exposures`),
+            fetch(`${API_BASE}/api/backtests/${selectedBacktest.id}/sector-exposures`)
+          ]);
+          if (fRes.ok) {
+            const fData = (await fRes.json()) as {
+              date: string;
+              value?: number | null;
+              quality?: number | null;
+              momentum?: number | null;
+              low_vol?: number | null;
+              size?: number | null;
+            }[];
+            setFactorSeries(fData);
+          } else {
+            setFactorSeries([]);
+          }
+          if (sRes.ok) {
+            const sData = (await sRes.json()) as {
+              date: string;
+              sector: string;
+              weight: number;
+            }[];
+            setSectorSeries(sData);
+          } else {
+            setSectorSeries([]);
+          }
+        } catch {
+          setFactorSeries([]);
+          setSectorSeries([]);
+        }
+      };
+      void loadAnalyticsSeries();
+    }, [selectedBacktest]);
+
     return (
       <Box sx={{ mt: 2 }}>
         <Grid container spacing={2}>
@@ -1772,10 +1882,77 @@ export const PortfolioDetailPage = () => {
               <Typography variant="subtitle1" gutterBottom>
                 Allocation &amp; exposures
               </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Sector/industry and per-strategy allocation charts will be
-                plugged in here as portfolio allocation data becomes available.
-              </Typography>
+              {factorSeries.length === 0 && sectorSeries.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  Factor and sector exposure series will appear once portfolio
+                  backtests with exposures are available.
+                </Typography>
+              ) : (
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Factor tilt over time
+                    </Typography>
+                    <Box sx={{ height: 220 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={factorSeries}>
+                          <XAxis dataKey="date" hide />
+                          <YAxis />
+                          <RechartsTooltip />
+                          <Line
+                            type="monotone"
+                            dataKey="value"
+                            stroke="#1976d2"
+                            dot={false}
+                            name="Value"
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="quality"
+                            stroke="#388e3c"
+                            dot={false}
+                            name="Quality"
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Sector allocation (latest)
+                    </Typography>
+                    <Box sx={{ height: 220 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={(() => {
+                              if (sectorSeries.length === 0) return [];
+                              const latestDate =
+                                sectorSeries[sectorSeries.length - 1]?.date;
+                              const bySector: Record<string, number> = {};
+                              sectorSeries.forEach((row) => {
+                                if (row.date !== latestDate) return;
+                                bySector[row.sector] =
+                                  (bySector[row.sector] ?? 0) + row.weight;
+                              });
+                              return Object.entries(bySector).map(
+                                ([name, value]) => ({ name, value })
+                              );
+                            })()}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={80}
+                            label
+                          />
+                          <RechartsTooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </Box>
+                  </Grid>
+                </Grid>
+              )}
             </Paper>
           </Grid>
         </Grid>

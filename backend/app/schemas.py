@@ -172,6 +172,25 @@ class CovarianceMatrixResponse(BaseModel):
     corr_matrix: list[list[float]]
 
 
+class BacktestFactorExposurePoint(BaseModel):
+    """Single factor exposure observation for a backtest."""
+
+    date: date
+    value: float | None = None
+    quality: float | None = None
+    momentum: float | None = None
+    low_vol: float | None = None
+    size: float | None = None
+
+
+class BacktestSectorExposurePoint(BaseModel):
+    """Single sector exposure observation for a backtest."""
+
+    date: date
+    sector: str
+    weight: float
+
+
 # -------------------------
 # Screener schemas
 # -------------------------

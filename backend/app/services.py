@@ -16,6 +16,9 @@ from .models import (
     CovarianceMatrix,
     FactorExposure,
     FundamentalsSnapshot,
+    BacktestFactorExposure,
+    BacktestSectorExposure,
+    PortfolioBacktest,
     Portfolio,
     RiskModel,
     Stock,
@@ -1299,6 +1302,113 @@ class ScreenerService:
         if isinstance(limit, int) and limit > 0:
             results = results[:limit]
         return results
+
+
+class AnalyticsService:
+    """Analytics helpers for factor and sector exposures over time."""
+
+    def get_factor_exposures(
+        self,
+        meta_db: Session,
+        *,
+        backtest_id: int,
+    ) -> List[dict]:
+        """Return factor exposure time series for a portfolio backtest."""
+
+        rows = (
+            meta_db.query(BacktestFactorExposure)
+            .filter(BacktestFactorExposure.backtest_id == backtest_id)
+            .order_by(BacktestFactorExposure.date.asc())
+            .all()
+        )
+        series: List[dict] = []
+        for row in rows:
+            series.append(
+                {
+                    "date": row.date,
+                    "value": row.value,
+                    "quality": row.quality,
+                    "momentum": row.momentum,
+                    "low_vol": row.low_vol,
+                    "size": row.size,
+                }
+            )
+        return series
+
+    def get_sector_exposures(
+        self,
+        meta_db: Session,
+        *,
+        backtest_id: int,
+    ) -> List[dict]:
+        """Return sector allocation time series for a portfolio backtest."""
+
+        rows = (
+            meta_db.query(BacktestSectorExposure)
+            .filter(BacktestSectorExposure.backtest_id == backtest_id)
+            .order_by(
+                BacktestSectorExposure.date.asc(),
+                BacktestSectorExposure.sector.asc(),
+            )
+            .all()
+        )
+        result: Dict[tuple, float] = {}
+        for row in rows:
+            key = (row.date, row.sector)
+            result[key] = float(row.weight)
+
+        series: List[dict] = []
+        for (dt, sector), weight in sorted(result.items()):
+            series.append({"date": dt, "sector": sector, "weight": weight})
+        return series
+
+    def summarize_backtest(
+        self,
+        meta_db: Session,
+        *,
+        backtest_id: int,
+    ) -> dict:
+        """Return a lightweight analytics summary for a portfolio backtest."""
+
+        bt = meta_db.get(PortfolioBacktest, backtest_id)
+        if bt is None:
+            return {}
+
+        metrics = bt.metrics_json or {}
+        summary = {
+            "volatility": float(metrics.get("volatility", 0.0)),
+            "sharpe": float(
+                metrics.get("sharpe") or metrics.get("sharpe_ratio") or 0.0
+            ),
+            "beta": float(metrics.get("beta", 0.0)),
+            "cvar_95": float(metrics.get("cvar_95", 0.0)),
+        }
+
+        factor_rows = self.get_factor_exposures(meta_db, backtest_id=backtest_id)
+        if factor_rows:
+            latest = factor_rows[-1]
+            summary["factor_tilt"] = {
+                "value": latest.get("value"),
+                "quality": latest.get("quality"),
+                "momentum": latest.get("momentum"),
+                "low_vol": latest.get("low_vol"),
+                "size": latest.get("size"),
+            }
+
+        sector_rows = self.get_sector_exposures(meta_db, backtest_id=backtest_id)
+        if sector_rows:
+            latest_date = sector_rows[-1]["date"]
+            sector_alloc: Dict[str, float] = {}
+            for row in sector_rows:
+                if row["date"] != latest_date:
+                    continue
+                sector_alloc[row["sector"]] = sector_alloc.get(
+                    row["sector"],
+                    0.0,
+                ) + float(row["weight"])
+            summary["sector_allocation"] = sector_alloc
+
+        return summary
 
 
 class OptimizerService:
