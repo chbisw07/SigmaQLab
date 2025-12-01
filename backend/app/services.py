@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import Dict, List
 import hashlib
 import math
 import statistics
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Dict, List
 
+import numpy as np
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
@@ -15,8 +16,11 @@ from .models import (
     CovarianceMatrix,
     FactorExposure,
     FundamentalsSnapshot,
+    Portfolio,
     RiskModel,
     Stock,
+    StockGroup,
+    StockGroupMember,
 )
 
 
@@ -1295,3 +1299,352 @@ class ScreenerService:
         if isinstance(limit, int) and limit > 0:
             results = results[:limit]
         return results
+
+
+class OptimizerService:
+    """Portfolio optimisation service built on factor and risk models."""
+
+    def __init__(
+        self,
+        *,
+        factor_service: FactorService | None = None,
+        risk_service: RiskModelService | None = None,
+    ) -> None:
+        self._factor_service = factor_service or FactorService()
+        self._risk_service = risk_service or RiskModelService()
+
+    def _resolve_universe_symbols(
+        self,
+        meta_db: Session,
+        portfolio: Portfolio,
+    ) -> List[str]:
+        """Resolve portfolio.universe_scope into a list of symbols.
+
+        Currently supports universe_scope strings of the form 'group:<id>'.
+        """
+
+        scope = portfolio.universe_scope or ""
+        if scope.startswith("group:"):
+            _, group_id_str = scope.split(":", 1)
+            try:
+                group_id = int(group_id_str)
+            except ValueError:
+                msg = f"Invalid universe_scope for portfolio: {scope}"
+                raise ValueError(msg) from None
+            group = meta_db.get(StockGroup, group_id)
+            if group is None:
+                msg = f"StockGroup {group_id} referenced by portfolio not found"
+                raise ValueError(msg)
+            rows = (
+                meta_db.query(Stock)
+                .join(StockGroupMember, StockGroupMember.stock_id == Stock.id)
+                .filter(StockGroupMember.group_id == group_id)
+                .order_by(Stock.symbol.asc())
+                .all()
+            )
+            return [row.symbol for row in rows]
+
+        msg = (
+            "Portfolio.universe_scope must currently be of the form 'group:<id>'. "
+            f"Got '{scope}'."
+        )
+        raise ValueError(msg)
+
+    @staticmethod
+    def _equal_weight(n: int) -> np.ndarray:
+        if n <= 0:
+            return np.array([], dtype=float)
+        w = np.full(n, 1.0 / float(n), dtype=float)
+        return w
+
+    @staticmethod
+    def _clamp_and_normalise(
+        weights: np.ndarray,
+        *,
+        min_weight: float | None,
+        max_weight: float | None,
+    ) -> np.ndarray:
+        if weights.size == 0:
+            return weights
+        w = weights.copy()
+        if min_weight is not None:
+            w = np.maximum(w, float(min_weight))
+        if max_weight is not None:
+            w = np.minimum(w, float(max_weight))
+        total = float(w.sum())
+        if total <= 0.0:
+            return OptimizerService._equal_weight(len(w))
+        return w / total
+
+    @staticmethod
+    def _min_variance_weights(cov: np.ndarray) -> np.ndarray:
+        """Compute unconstrained minimum-variance weights."""
+
+        n = cov.shape[0]
+        if n == 0:
+            return np.array([], dtype=float)
+        jitter = 1e-8
+        cov_jittered = cov + np.eye(n) * jitter
+        inv = np.linalg.pinv(cov_jittered)
+        ones = np.ones(n)
+        num = inv @ ones
+        denom = float(ones.T @ inv @ ones)
+        if denom <= 0.0:
+            return OptimizerService._equal_weight(n)
+        w = num / denom
+        if not np.isfinite(w).all():
+            return OptimizerService._equal_weight(n)
+        return w
+
+    @staticmethod
+    def _max_sharpe_weights(cov: np.ndarray, mu: np.ndarray) -> np.ndarray:
+        """Compute approximate long-only maximum Sharpe weights."""
+
+        n = cov.shape[0]
+        if n == 0:
+            return np.array([], dtype=float)
+        jitter = 1e-8
+        cov_jittered = cov + np.eye(n) * jitter
+        inv = np.linalg.pinv(cov_jittered)
+        w = inv @ mu
+        if not np.isfinite(w).all():
+            return OptimizerService._equal_weight(n)
+        # Enforce long-only by clipping negatives and renormalising.
+        w = np.maximum(w, 0.0)
+        total = float(w.sum())
+        if total <= 0.0:
+            return OptimizerService._equal_weight(n)
+        return w / total
+
+    def optimise_portfolio(
+        self,
+        meta_db: Session,
+        prices_db: Session,
+        *,
+        portfolio_id: int,
+        as_of_date: date,
+        optimizer_type: str,
+        constraints: dict | None = None,
+        previous_weights: list[dict] | None = None,
+    ) -> tuple[list[dict], dict[str, float], dict[str, float], dict[str, object]]:
+        """Optimise weights for a portfolio universe.
+
+        Returns (weights, risk_metrics, factor_exposures, diagnostics).
+        """
+
+        portfolio = meta_db.get(Portfolio, portfolio_id)
+        if portfolio is None:
+            msg = f"Portfolio {portfolio_id} not found"
+            raise ValueError(msg)
+
+        symbols = self._resolve_universe_symbols(meta_db, portfolio)
+        if not symbols:
+            msg = "Portfolio universe resolved to an empty symbol list"
+            raise ValueError(msg)
+
+        # Compute or load factor exposures and risk model.
+        exposures_by_symbol = self._factor_service.compute_and_store_exposures(
+            meta_db=meta_db,
+            prices_db=prices_db,
+            symbols=symbols,
+            as_of_date=as_of_date,
+            timeframe="1d",
+        )
+        self._risk_service.compute_and_store_risk(
+            meta_db=meta_db,
+            prices_db=prices_db,
+            symbols=symbols,
+            as_of_date=as_of_date,
+            timeframe="1d",
+        )
+
+        # Fetch covariance matrix blob.
+        universe_hash = self._risk_service._universe_hash(symbols)
+        cov_row = (
+            meta_db.query(CovarianceMatrix)
+            .filter(
+                CovarianceMatrix.as_of_date == as_of_date,
+                CovarianceMatrix.universe_hash == universe_hash,
+            )
+            .one_or_none()
+        )
+        if cov_row is None or not cov_row.matrix_blob:
+            msg = "Covariance matrix not available for optimisation universe"
+            raise ValueError(msg)
+        blob = cov_row.matrix_blob
+        cov_matrix = blob.get("cov_matrix")
+        if cov_matrix is None:
+            msg = "Covariance matrix blob missing 'cov_matrix'"
+            raise ValueError(msg)
+
+        cov = np.array(cov_matrix, dtype=float)
+        n = cov.shape[0]
+        if n != len(symbols):
+            msg = "Covariance matrix dimension mismatch with universe size"
+            raise ValueError(msg)
+
+        # Expected returns: simple annualised mean return estimate from
+        # historical daily returns.
+        returns_by_symbol = self._risk_service._load_returns_matrix(  # type: ignore[attr-defined]
+            prices_db,
+            symbols=symbols,
+            timeframe="1d",
+            as_of=as_of_date,
+        )
+        mu_vec: list[float] = []
+        vol_vec: list[float] = []
+        for sym in symbols:
+            rets = returns_by_symbol.get(sym, [])
+            if rets:
+                mu_daily = statistics.fmean(rets)
+                mu_vec.append(mu_daily * 252.0)
+                vol = _compute_annualised_volatility(rets) or 0.0
+                vol_vec.append(vol)
+            else:
+                mu_vec.append(0.0)
+                vol_vec.append(0.0)
+        mu = np.array(mu_vec, dtype=float)
+
+        # Choose optimisation mode.
+        opt = optimizer_type.lower()
+        if opt in {"equal_weight", "ew"}:
+            weights_arr = self._equal_weight(n)
+        elif opt in {"market_cap", "mcw"}:
+            # Approximate market-cap weights. For this sprint we fall back to
+            # equal-weight as market caps are not surfaced here yet.
+            weights_arr = self._equal_weight(n)
+        elif opt in {"minvar", "min_var", "minimum_variance"}:
+            weights_arr = self._min_variance_weights(cov)
+        elif opt in {"maxsharpe", "max_sharpe", "maximum_sharpe"}:
+            weights_arr = self._max_sharpe_weights(cov, mu)
+        elif opt in {"risk_parity", "rp"}:
+            vols = np.array([v if v > 0.0 else 0.0 for v in vol_vec], dtype=float)
+            inv_vol = np.where(vols > 0.0, 1.0 / vols, 0.0)
+            if inv_vol.sum() <= 0.0:
+                weights_arr = self._equal_weight(n)
+            else:
+                weights_arr = inv_vol / float(inv_vol.sum())
+        elif opt in {"hrp"}:
+            # For S16 we approximate HRP with risk-parity-style weights.
+            vols = np.array([v if v > 0.0 else 0.0 for v in vol_vec], dtype=float)
+            inv_vol = np.where(vols > 0.0, 1.0 / vols, 0.0)
+            if inv_vol.sum() <= 0.0:
+                weights_arr = self._equal_weight(n)
+            else:
+                weights_arr = inv_vol / float(inv_vol.sum())
+        elif opt in {"cvar"}:
+            # CVaR optimisation is approximated by a minimum-variance
+            # solution for this sprint.
+            weights_arr = self._min_variance_weights(cov)
+        else:
+            weights_arr = self._max_sharpe_weights(cov, mu)
+
+        min_w = None
+        max_w = None
+        if constraints is not None:
+            min_w = constraints.get("min_weight")
+            max_w = constraints.get("max_weight")
+        weights_arr = self._clamp_and_normalise(
+            weights_arr,
+            min_weight=min_w,
+            max_weight=max_w,
+        )
+
+        # Persist constraints snapshot for the portfolio when provided.
+        if constraints is not None:
+            from .models import PortfolioConstraints  # local import to avoid cycles
+
+            pc = (
+                meta_db.query(PortfolioConstraints)
+                .filter(PortfolioConstraints.portfolio_id == portfolio_id)
+                .one_or_none()
+            )
+            if pc is None:
+                pc = PortfolioConstraints(portfolio_id=portfolio_id)
+            pc.min_weight = constraints.get("min_weight")
+            pc.max_weight = constraints.get("max_weight")
+            pc.turnover_limit = constraints.get("turnover_limit")
+            pc.target_volatility = constraints.get("target_volatility")
+            pc.max_beta = constraints.get("max_beta")
+            pc.sector_caps_json = constraints.get("sector_caps")
+            pc.factor_constraints_json = constraints.get("factor_constraints")
+            meta_db.add(pc)
+            meta_db.commit()
+
+        # Compute risk metrics.
+        w = weights_arr.reshape((n, 1))
+        portfolio_var_arr = w.T @ cov @ w
+        portfolio_var = (
+            float(portfolio_var_arr[0][0]) if portfolio_var_arr.size else 0.0
+        )
+        portfolio_vol = math.sqrt(portfolio_var) if portfolio_var > 0.0 else 0.0
+        portfolio_return = float(mu @ weights_arr)
+        sharpe = portfolio_return / portfolio_vol if portfolio_vol > 0.0 else 0.0
+
+        # Aggregate beta using stored RiskModel rows.
+        betas: Dict[str, float] = {}
+        risk_rows = (
+            meta_db.query(RiskModel)
+            .filter(
+                RiskModel.symbol.in_(symbols),  # type: ignore[arg-type]
+                RiskModel.as_of_date == as_of_date,
+            )
+            .all()
+        )
+        for row in risk_rows:
+            if row.beta is not None:
+                betas[row.symbol] = float(row.beta)
+        portfolio_beta = float(
+            sum(weights_arr[i] * betas.get(sym, 0.0) for i, sym in enumerate(symbols))
+        )
+
+        risk_metrics = {
+            "volatility": portfolio_vol,
+            "expected_return": portfolio_return,
+            "sharpe": sharpe,
+            "beta": portfolio_beta,
+        }
+
+        # Portfolio-level factor exposures as weighted averages.
+        agg_exposures: Dict[str, float] = {}
+        factor_names = ["value", "quality", "momentum", "low_vol", "size"]
+        for name in factor_names:
+            total = 0.0
+            for i, sym in enumerate(symbols):
+                exposure = exposures_by_symbol.get(sym)
+                if exposure is None:
+                    continue
+                val = getattr(exposure, name, None)
+                if val is None:
+                    continue
+                total += float(weights_arr[i]) * float(val)
+            agg_exposures[name] = total
+
+        diagnostics: Dict[str, object] = {
+            "optimizer_type": optimizer_type,
+            "universe_size": len(symbols),
+        }
+        if constraints is not None:
+            diagnostics["constraints_applied"] = {
+                "min_weight": min_w,
+                "max_weight": max_w,
+            }
+
+        weight_dicts: list[dict] = []
+        # Fetch basic sector metadata for reporting.
+        stocks = (
+            meta_db.query(Stock)
+            .filter(Stock.symbol.in_(symbols))  # type: ignore[arg-type]
+            .all()
+        )
+        sector_by_symbol = {s.symbol: s.sector for s in stocks}
+        for i, sym in enumerate(symbols):
+            weight_dicts.append(
+                {
+                    "symbol": sym,
+                    "weight": float(weights_arr[i]),
+                    "sector": sector_by_symbol.get(sym),
+                }
+            )
+
+        return weight_dicts, risk_metrics, agg_exposures, diagnostics

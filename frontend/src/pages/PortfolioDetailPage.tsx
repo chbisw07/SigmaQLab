@@ -26,8 +26,14 @@ import {
 import {
   LineChart,
   Line,
+  Pie,
+  PieChart,
+  Radar,
+  RadarChart,
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
+  PolarAngleAxis,
+  PolarGrid,
   XAxis,
   YAxis
 } from "recharts";
@@ -36,6 +42,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import type { StockGroupSummary } from "../types/stocks";
+import type {
+  OptimizerType,
+  OptimizedWeight,
+  PortfolioOptimizeResponse
+} from "../types/portfolio";
 
 type FetchState = "idle" | "loading" | "success" | "error";
 
@@ -137,7 +148,7 @@ export const PortfolioDetailPage = () => {
   const isNew = id === "new";
 
   const [tab, setTab] = useState<
-    "overview" | "settings" | "backtests" | "trades" | "analytics"
+    "overview" | "settings" | "construction" | "backtests" | "trades" | "analytics"
   >(isNew ? "settings" : "overview");
 
   const [portfolio, setPortfolio] = useState<PortfolioDto | null>(null);
@@ -185,6 +196,22 @@ export const PortfolioDetailPage = () => {
   const [snackbarSeverity, setSnackbarSeverity] = useState<
     "success" | "error" | "info"
   >("info");
+
+  // Construction tab state
+  const [optimizerType, setOptimizerType] = useState<OptimizerType>("max_sharpe");
+  const [constructionAsOfDate, setConstructionAsOfDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  );
+  const [minWeight, setMinWeight] = useState<string>("0");
+  const [maxWeight, setMaxWeight] = useState<string>("0.10");
+  const [targetVolatility, setTargetVolatility] = useState<string>("");
+  const [maxBeta, setMaxBeta] = useState<string>("");
+  const [turnoverLimit, setTurnoverLimit] = useState<string>("");
+  const [optState, setOptState] = useState<FetchState>("idle");
+  const [optMessage, setOptMessage] = useState<string | null>(null);
+  const [optResult, setOptResult] = useState<PortfolioOptimizeResponse | null>(
+    null
+  );
 
   const selectedUniverseGroup = useMemo(() => {
     if (!universeScope || !universeScope.startsWith("group:")) return null;
@@ -300,7 +327,13 @@ export const PortfolioDetailPage = () => {
 
   const handleTabChange = (
     _event: SyntheticEvent,
-    value: "overview" | "settings" | "backtests" | "trades" | "analytics"
+    value:
+      | "overview"
+      | "settings"
+      | "construction"
+      | "backtests"
+      | "trades"
+      | "analytics"
   ) => {
     setTab(value);
   };
@@ -789,6 +822,436 @@ export const PortfolioDetailPage = () => {
                 as a placeholder aligned with the PRD.
               </Typography>
             </Paper>
+          </Grid>
+        </Grid>
+      </Box>
+    );
+  };
+
+  const handleRunOptimization = async () => {
+    if (!portfolio) {
+      setOptState("error");
+      setOptMessage("Save portfolio settings before running optimisation.");
+      return;
+    }
+    if (!constructionAsOfDate) {
+      setOptState("error");
+      setOptMessage("As-of date is required.");
+      return;
+    }
+    setOptState("loading");
+    setOptMessage(null);
+
+    const minW = Number.parseFloat(minWeight);
+    const maxW = Number.parseFloat(maxWeight);
+    const targetVol = Number.parseFloat(targetVolatility);
+    const maxB = Number.parseFloat(maxBeta);
+    const turnover = Number.parseFloat(turnoverLimit);
+
+    const constraints: Record<string, unknown> = {};
+    if (Number.isFinite(minW)) constraints.min_weight = minW;
+    if (Number.isFinite(maxW)) constraints.max_weight = maxW;
+    if (Number.isFinite(targetVol)) constraints.target_volatility = targetVol;
+    if (Number.isFinite(maxB)) constraints.max_beta = maxB;
+    if (Number.isFinite(turnover)) constraints.turnover_limit = turnover;
+
+    const payload: Record<string, unknown> = {
+      portfolio_id: portfolio.id,
+      as_of_date: constructionAsOfDate,
+      optimizer_type: optimizerType,
+      constraints
+    };
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/portfolio/optimize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setOptState("error");
+        setOptMessage(
+          (err as { detail?: string }).detail ??
+            "Failed to run portfolio optimisation."
+        );
+        return;
+      }
+      const data: PortfolioOptimizeResponse = await res.json();
+      setOptResult(data);
+      setOptState("success");
+      setOptMessage("Optimisation completed.");
+    } catch (error) {
+      setOptState("error");
+      setOptMessage(
+        error instanceof Error ? error.message : "Unexpected error running optimisation."
+      );
+    }
+  };
+
+  const handleSaveOptimizedWeights = async () => {
+    if (!portfolio || !optResult || !optResult.weights.length) return;
+    if (!constructionAsOfDate) {
+      setOptState("error");
+      setOptMessage("As-of date is required to save weights.");
+      return;
+    }
+    setOptState("loading");
+    setOptMessage(null);
+
+    const payload = {
+      portfolio_id: portfolio.id,
+      as_of_date: constructionAsOfDate,
+      weights: optResult.weights.map((w) => ({
+        symbol: w.symbol,
+        weight: w.weight
+      }))
+    };
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/portfolio/save_weights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setOptState("error");
+        setOptMessage(
+          (err as { detail?: string }).detail ??
+            "Failed to save optimised weights."
+        );
+        return;
+      }
+      setOptState("success");
+      setOptMessage("Optimised weights saved.");
+      setSnackbarSeverity("success");
+      setSnackbarMessage("Optimised weights saved for this portfolio.");
+    } catch (error) {
+      setOptState("error");
+      setOptMessage(
+        error instanceof Error ? error.message : "Unexpected error saving weights."
+      );
+      setSnackbarSeverity("error");
+      setSnackbarMessage("Failed to save optimised weights.");
+    }
+  };
+
+  const renderConstructionTab = () => {
+    if (!portfolio || isNew) {
+      return (
+        <Box sx={{ mt: 2 }}>
+          <Alert severity="info">
+            Save the portfolio settings first, then use this tab to construct an
+            optimised allocation.
+          </Alert>
+        </Box>
+      );
+    }
+
+    const weights: OptimizedWeight[] = optResult?.weights ?? [];
+    const risk = optResult?.risk ?? {};
+    const exposures = optResult?.exposures ?? {};
+
+    const weightsWithId = weights.map((w, idx) => ({
+      id: idx,
+      ...w
+    }));
+
+    const weightColumns: GridColDef[] = [
+      { field: "symbol", headerName: "Symbol", width: 120 },
+      {
+        field: "weight",
+        headerName: "Weight",
+        width: 120,
+        valueFormatter: (params) =>
+          params.value != null ? `${(params.value as number).toFixed(4)}` : ""
+      },
+      { field: "sector", headerName: "Sector", width: 140 }
+    ];
+
+    const sectorData = Object.values(
+      weights.reduce<Record<string, { name: string; value: number }>>(
+        (acc, w) => {
+          const key = w.sector || "Unknown";
+          const existing = acc[key] ?? { name: key, value: 0 };
+          existing.value += w.weight;
+          acc[key] = existing;
+          return acc;
+        },
+        {}
+      )
+    );
+
+    const factorRadarData = [
+      { factor: "Value", exposure: (exposures.value as number | undefined) ?? 0 },
+      { factor: "Quality", exposure: (exposures.quality as number | undefined) ?? 0 },
+      {
+        factor: "Momentum",
+        exposure: (exposures.momentum as number | undefined) ?? 0
+      },
+      { factor: "Low-Vol", exposure: (exposures.low_vol as number | undefined) ?? 0 },
+      { factor: "Size", exposure: (exposures.size as number | undefined) ?? 0 }
+    ];
+
+    return (
+      <Box sx={{ mt: 2 }}>
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={5}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Optimisation settings
+                </Typography>
+                <Stack spacing={2}>
+                  <TextField
+                    select
+                    label="Optimizer"
+                    size="small"
+                    value={optimizerType}
+                    onChange={(e) =>
+                      setOptimizerType(e.target.value as OptimizerType)
+                    }
+                    helperText="Select optimisation mode."
+                  >
+                    <MenuItem value="max_sharpe">Max Sharpe</MenuItem>
+                    <MenuItem value="min_var">Minimum Variance</MenuItem>
+                    <MenuItem value="risk_parity">Risk Parity</MenuItem>
+                    <MenuItem value="hrp">Hierarchical Risk Parity (approx)</MenuItem>
+                    <MenuItem value="cvar">CVaR (approx)</MenuItem>
+                    <MenuItem value="equal_weight">Equal Weight</MenuItem>
+                    <MenuItem value="market_cap">Market-Cap Weight</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="As-of date"
+                    type="date"
+                    size="small"
+                    value={constructionAsOfDate}
+                    onChange={(e) => setConstructionAsOfDate(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                  <Stack direction="row" spacing={2}>
+                    <TextField
+                      label="Min weight per stock"
+                      type="number"
+                      size="small"
+                      value={minWeight}
+                      onChange={(e) => setMinWeight(e.target.value)}
+                      helperText="Fraction (e.g. 0, 0.01)"
+                    />
+                    <TextField
+                      label="Max weight per stock"
+                      type="number"
+                      size="small"
+                      value={maxWeight}
+                      onChange={(e) => setMaxWeight(e.target.value)}
+                      helperText="Fraction (e.g. 0.1 = 10%)"
+                    />
+                  </Stack>
+                  <Stack direction="row" spacing={2}>
+                    <TextField
+                      label="Target volatility"
+                      type="number"
+                      size="small"
+                      value={targetVolatility}
+                      onChange={(e) => setTargetVolatility(e.target.value)}
+                      helperText="Optional annualised vol target"
+                    />
+                    <TextField
+                      label="Max beta"
+                      type="number"
+                      size="small"
+                      value={maxBeta}
+                      onChange={(e) => setMaxBeta(e.target.value)}
+                      helperText="Optional portfolio beta cap"
+                    />
+                  </Stack>
+                  <TextField
+                    label="Turnover limit"
+                    type="number"
+                    size="small"
+                    value={turnoverLimit}
+                    onChange={(e) => setTurnoverLimit(e.target.value)}
+                    helperText="Optional per-rebalance turnover cap"
+                  />
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={() => void handleRunOptimization()}
+                      disabled={optState === "loading"}
+                    >
+                      Run optimisation
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => void handleSaveOptimizedWeights()}
+                      disabled={
+                        optState === "loading" ||
+                        !optResult ||
+                        !optResult.weights.length
+                      }
+                    >
+                      Save weights
+                    </Button>
+                  </Stack>
+                  {optMessage && (
+                    <Typography
+                      variant="body2"
+                      color={optState === "error" ? "error" : "text.secondary"}
+                    >
+                      {optMessage}
+                    </Typography>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={7}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <Card>
+                  <CardContent>
+                    <Typography variant="h6" gutterBottom>
+                      Weights preview
+                    </Typography>
+                    {weights.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        Run an optimisation to see weights.
+                      </Typography>
+                    ) : (
+                      <Box sx={{ height: 260 }}>
+                        <DataGrid
+                          rows={weightsWithId}
+                          columns={weightColumns}
+                          density="compact"
+                          hideFooterSelectedRowCount
+                          pageSizeOptions={[10, 25, 50]}
+                        />
+                      </Box>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Card>
+                  <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                      Sector allocation
+                    </Typography>
+                    {sectorData.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        No sector data available.
+                      </Typography>
+                    ) : (
+                      <Box sx={{ height: 260 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={sectorData}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              outerRadius={80}
+                              label
+                            />
+                            <RechartsTooltip />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </Box>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Card>
+                  <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                      Factor exposure (portfolio)
+                    </Typography>
+                    <Box sx={{ height: 260 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <RadarChart data={factorRadarData}>
+                          <PolarGrid />
+                          <PolarAngleAxis dataKey="factor" />
+                          <Radar
+                            name="Exposure"
+                            dataKey="exposure"
+                            stroke="#1976d2"
+                            fill="#1976d2"
+                            fillOpacity={0.3}
+                          />
+                          <RechartsTooltip />
+                        </RadarChart>
+                      </ResponsiveContainer>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+              <Grid item xs={12}>
+                <Card>
+                  <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                      Risk summary
+                    </Typography>
+                    <Grid container spacing={2}>
+                      <Grid item xs={6} md={3}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          display="block"
+                        >
+                          Volatility
+                        </Typography>
+                        <Typography variant="h6">
+                          {((risk.volatility as number | undefined) ?? 0).toFixed(4)}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6} md={3}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          display="block"
+                        >
+                          Expected return
+                        </Typography>
+                        <Typography variant="h6">
+                          {((risk.expected_return as number | undefined) ?? 0).toFixed(
+                            4
+                          )}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6} md={3}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          display="block"
+                        >
+                          Sharpe
+                        </Typography>
+                        <Typography variant="h6">
+                          {((risk.sharpe as number | undefined) ?? 0).toFixed(3)}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6} md={3}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          display="block"
+                        >
+                          Beta
+                        </Typography>
+                        <Typography variant="h6">
+                          {((risk.beta as number | undefined) ?? 0).toFixed(3)}
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
           </Grid>
         </Grid>
       </Box>
@@ -1356,6 +1819,7 @@ export const PortfolioDetailPage = () => {
       >
         <Tab label="Overview" value="overview" />
         <Tab label="Settings" value="settings" />
+        <Tab label="Construction" value="construction" />
         <Tab label="Backtests" value="backtests" />
         <Tab label="Trades & Holdings" value="trades" />
         <Tab label="Analytics" value="analytics" />
@@ -1363,6 +1827,7 @@ export const PortfolioDetailPage = () => {
 
       {tab === "overview" && renderOverviewTab()}
       {tab === "settings" && renderSettingsTab()}
+      {tab === "construction" && renderConstructionTab()}
       {tab === "backtests" && renderBacktestsTab()}
       {tab === "trades" && renderTradesHoldingsTab()}
       {tab === "analytics" && renderAnalyticsTab()}

@@ -854,3 +854,105 @@ class PortfolioBacktestRead(BaseModel):
     finished_at: datetime | None = None
 
     model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class PortfolioConstraintsConfig(BaseModel):
+    """Constraint configuration for portfolio optimisation."""
+
+    min_weight: float | None = Field(
+        default=None,
+        description="Minimum weight per stock (0–1, optional).",
+    )
+    max_weight: float | None = Field(
+        default=None,
+        description="Maximum weight per stock (0–1, optional).",
+    )
+    turnover_limit: float | None = Field(
+        default=None,
+        description="Optional per-rebalance turnover limit (0–1).",
+    )
+    target_volatility: float | None = Field(
+        default=None,
+        description="Target annualised volatility for the portfolio (0–1, optional).",
+    )
+    max_beta: float | None = Field(
+        default=None,
+        description="Maximum allowed portfolio beta (optional).",
+    )
+    sector_caps: dict[str, float] | None = Field(
+        default=None,
+        description="Optional per-sector maximum weights.",
+    )
+    factor_constraints: dict[str, float] | None = Field(
+        default=None,
+        description=(
+            "Optional factor exposure constraints, keyed by factor name "
+            "(e.g. 'value_min', 'quality_min')."
+        ),
+    )
+
+
+class PortfolioConstraintsRead(PortfolioConstraintsConfig):
+    """Constraints as stored in the persistence layer."""
+
+    id: int
+    portfolio_id: int
+    sector_caps: dict[str, float] | None = Field(
+        default=None,
+        validation_alias="sector_caps_json",
+    )
+    factor_constraints: dict[str, float] | None = Field(
+        default=None,
+        validation_alias="factor_constraints_json",
+    )
+
+    model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class PortfolioWeightItem(BaseModel):
+    """Single weight entry."""
+
+    symbol: str
+    weight: float
+
+
+class PortfolioOptimizeRequest(BaseModel):
+    """Request payload for optimising a portfolio."""
+
+    portfolio_id: int
+    as_of_date: date
+    optimizer_type: Literal[
+        "equal_weight",
+        "market_cap",
+        "min_var",
+        "max_sharpe",
+        "risk_parity",
+        "hrp",
+        "cvar",
+    ] = "max_sharpe"
+    previous_weights: list[PortfolioWeightItem] | None = None
+    constraints: PortfolioConstraintsConfig | None = None
+
+
+class PortfolioOptimizeResponse(BaseModel):
+    """Optimised weights, risk metrics, exposures, and diagnostics."""
+
+    weights: list[PortfolioWeightItem]
+    risk: dict[str, float]
+    exposures: dict[str, float]
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortfolioSaveWeightsRequest(BaseModel):
+    """Payload to persist optimised portfolio weights."""
+
+    portfolio_id: int
+    as_of_date: date | None = None
+    weights: list[PortfolioWeightItem]
+
+
+class PortfolioSaveWeightsResponse(BaseModel):
+    """Status returned after saving portfolio weights."""
+
+    status: str = "saved"
+    portfolio_id: int

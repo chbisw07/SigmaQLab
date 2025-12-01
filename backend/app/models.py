@@ -411,3 +411,51 @@ class PortfolioBacktest(Base):
     finished_at = Column(DateTime, nullable=True)
 
     portfolio = relationship("Portfolio", backref="backtests")
+
+
+class PortfolioConstraints(Base):
+    """Constraint settings for a portfolio."""
+
+    __tablename__ = "portfolio_constraints"
+
+    id = Column(Integer, primary_key=True, index=True)
+    portfolio_id = Column(
+        Integer,
+        ForeignKey("portfolios.id"),
+        nullable=False,
+        index=True,
+    )
+    min_weight = Column(Float, nullable=True)
+    max_weight = Column(Float, nullable=True)
+    turnover_limit = Column(Float, nullable=True)
+    target_volatility = Column(Float, nullable=True)
+    max_beta = Column(Float, nullable=True)
+    sector_caps_json = Column(JSON, nullable=True)
+    factor_constraints_json = Column(JSON, nullable=True)
+
+    portfolio = relationship("Portfolio", backref="constraints")
+
+
+class PortfolioWeight(Base):
+    """Stored portfolio weights for a given rebalance date."""
+
+    __tablename__ = "portfolio_weights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    portfolio_id = Column(
+        Integer,
+        ForeignKey("portfolios.id"),
+        nullable=False,
+        index=True,
+    )
+    date = Column(Date, nullable=False, index=True)
+    symbol = Column(String, nullable=False)
+    weight = Column(Float, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_portfolio_weights_portfolio_date",
+            "portfolio_id",
+            "date",
+        ),
+    )
