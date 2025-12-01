@@ -165,6 +165,19 @@ export const PortfolioDetailPage = () => {
   const [riskSummary, setRiskSummary] = useState<Record<string, unknown> | null>(
     null
   );
+  const [factorSeries, setFactorSeries] = useState<
+    {
+      date: string;
+      value?: number | null;
+      quality?: number | null;
+      momentum?: number | null;
+      low_vol?: number | null;
+      size?: number | null;
+    }[]
+  >([]);
+  const [sectorSeries, setSectorSeries] = useState<
+    { date: string; sector: string; weight: number }[]
+  >([]);
 
   // Settings tab state
   const [name, setName] = useState("");
@@ -349,6 +362,53 @@ export const PortfolioDetailPage = () => {
       }
     };
     void loadSummary();
+  }, [selectedBacktest]);
+
+  useEffect(() => {
+    const loadAnalyticsSeries = async () => {
+      if (!selectedBacktest) {
+        setFactorSeries([]);
+        setSectorSeries([]);
+        return;
+      }
+      try {
+        const [fRes, sRes] = await Promise.all([
+          fetch(
+            `${API_BASE}/api/backtests/${selectedBacktest.id}/factor-exposures`
+          ),
+          fetch(
+            `${API_BASE}/api/backtests/${selectedBacktest.id}/sector-exposures`
+          )
+        ]);
+        if (fRes.ok) {
+          const fData = (await fRes.json()) as {
+            date: string;
+            value?: number | null;
+            quality?: number | null;
+            momentum?: number | null;
+            low_vol?: number | null;
+            size?: number | null;
+          }[];
+          setFactorSeries(fData);
+        } else {
+          setFactorSeries([]);
+        }
+        if (sRes.ok) {
+          const sData = (await sRes.json()) as {
+            date: string;
+            sector: string;
+            weight: number;
+          }[];
+          setSectorSeries(sData);
+        } else {
+          setSectorSeries([]);
+        }
+      } catch {
+        setFactorSeries([]);
+        setSectorSeries([]);
+      }
+    };
+    void loadAnalyticsSeries();
   }, [selectedBacktest]);
 
   const handleTabChange = (
@@ -1768,56 +1828,6 @@ export const PortfolioDetailPage = () => {
     const maxDd = (metrics.max_drawdown as number | undefined) ?? 0;
     const beta = (metrics.beta as number | undefined) ?? 0;
     const cvar95 = (metrics.cvar_95 as number | undefined) ?? 0;
-
-    const [factorSeries, setFactorSeries] = useState<
-      { date: string; value?: number | null; quality?: number | null; momentum?: number | null; low_vol?: number | null; size?: number | null }[]
-    >([]);
-    const [sectorSeries, setSectorSeries] = useState<
-      { date: string; sector: string; weight: number }[]
-    >([]);
-
-    useEffect(() => {
-      const loadAnalyticsSeries = async () => {
-        if (!selectedBacktest) {
-          setFactorSeries([]);
-          setSectorSeries([]);
-          return;
-        }
-        try {
-          const [fRes, sRes] = await Promise.all([
-            fetch(`${API_BASE}/api/backtests/${selectedBacktest.id}/factor-exposures`),
-            fetch(`${API_BASE}/api/backtests/${selectedBacktest.id}/sector-exposures`)
-          ]);
-          if (fRes.ok) {
-            const fData = (await fRes.json()) as {
-              date: string;
-              value?: number | null;
-              quality?: number | null;
-              momentum?: number | null;
-              low_vol?: number | null;
-              size?: number | null;
-            }[];
-            setFactorSeries(fData);
-          } else {
-            setFactorSeries([]);
-          }
-          if (sRes.ok) {
-            const sData = (await sRes.json()) as {
-              date: string;
-              sector: string;
-              weight: number;
-            }[];
-            setSectorSeries(sData);
-          } else {
-            setSectorSeries([]);
-          }
-        } catch {
-          setFactorSeries([]);
-          setSectorSeries([]);
-        }
-      };
-      void loadAnalyticsSeries();
-    }, [selectedBacktest]);
 
     return (
       <Box sx={{ mt: 2 }}>
