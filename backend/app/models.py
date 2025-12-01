@@ -413,6 +413,59 @@ class PortfolioBacktest(Base):
     portfolio = relationship("Portfolio", backref="backtests")
 
 
+class BacktestFactorExposure(Base):
+    """Factor exposures for a portfolio backtest over time."""
+
+    __tablename__ = "backtest_factor_exposures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    backtest_id = Column(
+        Integer,
+        ForeignKey("portfolio_backtests.id"),
+        nullable=False,
+        index=True,
+    )
+    date = Column(Date, nullable=False, index=True)
+    value = Column(Float, nullable=True)
+    quality = Column(Float, nullable=True)
+    momentum = Column(Float, nullable=True)
+    low_vol = Column(Float, nullable=True)
+    size = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_backtest_factor_exposures_backtest_date",
+            "backtest_id",
+            "date",
+        ),
+    )
+
+
+class BacktestSectorExposure(Base):
+    """Sector weights for a portfolio backtest over time."""
+
+    __tablename__ = "backtest_sector_exposures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    backtest_id = Column(
+        Integer,
+        ForeignKey("portfolio_backtests.id"),
+        nullable=False,
+        index=True,
+    )
+    date = Column(Date, nullable=False, index=True)
+    sector = Column(String, nullable=False)
+    weight = Column(Float, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_backtest_sector_exposures_backtest_date",
+            "backtest_id",
+            "date",
+        ),
+    )
+
+
 class PortfolioConstraints(Base):
     """Constraint settings for a portfolio."""
 

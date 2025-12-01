@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from statistics import mean
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -11,7 +11,18 @@ from sqlalchemy.orm import Session
 from .backtest_engine import EquityPoint
 from .backtest_service import BacktestService
 from .data_manager import DataManager
-from .models import Portfolio, PortfolioBacktest, Stock, StockGroup, StockGroupMember
+from .models import (
+    BacktestFactorExposure,
+    BacktestSectorExposure,
+    FactorExposure,
+    Portfolio,
+    PortfolioBacktest,
+    PortfolioConstraints,
+    Stock,
+    StockGroup,
+    StockGroupMember,
+)
+from .services import OptimizerService
 
 
 @dataclass
@@ -40,12 +51,14 @@ class PortfolioService:
         *,
         data_manager: DataManager | None = None,
         backtest_service: BacktestService | None = None,
+        optimizer_service: OptimizerService | None = None,
     ) -> None:
         self._data_manager = data_manager or DataManager()
         # BacktestService gives us _load_price_dataframe and timeframe helpers.
         self._backtest_service = backtest_service or BacktestService(
             data_manager=self._data_manager,
         )
+        self._optimizer_service = optimizer_service or OptimizerService()
 
     # -------------------------
     # Public API
@@ -62,7 +75,16 @@ class PortfolioService:
         end: datetime,
         initial_capital: float,
     ) -> PortfolioBacktest:
-        """Run a portfolio backtest and persist a PortfolioBacktest record."""
+        """Run a portfolio backtest and persist a PortfolioBacktest record.
+
+        S16/G04 upgrades this from a simple equal-weight engine to a
+        factor-aware, optimiser-driven backtest:
+        - Universe is still resolved from a stock group.
+        - Rebalancing dates are derived from portfolio.rebalance_policy_json.
+        - At each rebalance we invoke OptimizerService to obtain target weights
+          based on historical factors and risk (covariance matrices).
+        - Holdings drift between rebalances as prices move.
+        """
 
         portfolio = meta_db.get(Portfolio, portfolio_id)
         if portfolio is None:
@@ -112,12 +134,17 @@ class PortfolioService:
             utilisation_history,
             final_holdings,
             final_prices,
-        ) = self._simulate_equal_weight_portfolio(
+            factor_exposures_ts,
+            sector_exposures_ts,
+            rebalance_risk_metrics,
+        ) = self._simulate_optimised_portfolio(
+            meta_db=meta_db,
+            prices_db=prices_db,
+            portfolio=portfolio,
             symbols=symbols,
             price_data=price_data,
             timeline=timeline,
             initial_capital=initial_capital,
-            risk_profile=portfolio.risk_profile_json or {},
         )
 
         final_equity = equity_curve[-1].equity if equity_curve else initial_capital
@@ -152,6 +179,25 @@ class PortfolioService:
         }
 
         metrics.update(equity_metrics)
+
+        # Simple historical CVaR (95%) based on daily equity returns.
+        cvar_95 = self._compute_cvar_95(equity_curve)
+        if cvar_95 is not None:
+            metrics["cvar_95"] = cvar_95
+
+        # Aggregate optimiser risk metrics across rebalances when available.
+        if rebalance_risk_metrics:
+            agg_risk: Dict[str, float] = {}
+            keys = set().union(*(m.keys() for m in rebalance_risk_metrics))
+            for key in keys:
+                vals = [float(m[key]) for m in rebalance_risk_metrics if key in m]
+                if vals:
+                    agg_risk[key] = float(mean(vals))
+            # Expose as top-level helpers and under a namespaced key.
+            metrics.setdefault("volatility", agg_risk.get("volatility", 0.0))
+            if "beta" in agg_risk:
+                metrics["beta"] = agg_risk["beta"]
+            metrics["optimizer_risk"] = agg_risk
 
         if utilisation_history:
             metrics["avg_capital_utilisation"] = float(mean(utilisation_history))
@@ -188,6 +234,34 @@ class PortfolioService:
         meta_db.add(bt)
         meta_db.commit()
         meta_db.refresh(bt)
+
+        # Persist factor and sector exposures per rebalance date for this
+        # backtest. For S16 we store one row per rebalance date.
+        for as_of, exposures in factor_exposures_ts.items():
+            meta_db.add(
+                BacktestFactorExposure(
+                    backtest_id=bt.id,
+                    date=as_of,
+                    value=exposures.get("value"),
+                    quality=exposures.get("quality"),
+                    momentum=exposures.get("momentum"),
+                    low_vol=exposures.get("low_vol"),
+                    size=exposures.get("size"),
+                )
+            )
+
+        for as_of, sector_weights in sector_exposures_ts.items():
+            for sector, weight in sector_weights.items():
+                meta_db.add(
+                    BacktestSectorExposure(
+                        backtest_id=bt.id,
+                        date=as_of,
+                        sector=sector,
+                        weight=float(weight),
+                    )
+                )
+
+        meta_db.commit()
         return bt
 
     # -------------------------
@@ -403,3 +477,382 @@ class PortfolioService:
                     final_prices[sym] = price
 
         return equity_curve, utilisation_history, holdings, final_prices
+
+    def _build_rebalance_schedule(
+        self,
+        timeline: List[datetime],
+        *,
+        portfolio: Portfolio,
+    ) -> List[datetime]:
+        """Return rebalance timestamps derived from portfolio policy."""
+
+        if not timeline:
+            return []
+
+        policy = portfolio.rebalance_policy_json or {}
+        freq_raw = str(policy.get("frequency", "monthly")).lower()
+        freq = freq_raw.strip() or "monthly"
+
+        if freq == "daily":
+            return list(timeline)
+
+        if freq == "weekly":
+            seen_weeks: set[tuple[int, int]] = set()
+            rebal: List[datetime] = []
+            for ts in timeline:
+                iso = ts.isocalendar()
+                key = (iso.year, iso.week)
+                if key not in seen_weeks:
+                    seen_weeks.add(key)
+                    rebal.append(ts)
+            return rebal
+
+        if freq in {"quarterly", "q"}:
+            seen_quarters: set[tuple[int, int]] = set()
+            rebal_q: List[datetime] = []
+            for ts in timeline:
+                quarter = (ts.month - 1) // 3 + 1
+                key_q = (ts.year, quarter)
+                if key_q not in seen_quarters:
+                    seen_quarters.add(key_q)
+                    rebal_q.append(ts)
+            return rebal_q
+
+        # Default: monthly.
+        seen_months: set[tuple[int, int]] = set()
+        rebal_m: List[datetime] = []
+        for ts in timeline:
+            key_m = (ts.year, ts.month)
+            if key_m not in seen_months:
+                seen_months.add(key_m)
+                rebal_m.append(ts)
+        return rebal_m
+
+    def _build_constraints_for_portfolio(
+        self,
+        meta_db: Session,
+        *,
+        portfolio: Portfolio,
+    ) -> Tuple[Dict[str, object] | None, float | None]:
+        """Return optimiser constraints dict and turnover limit, if any."""
+
+        constraints: Dict[str, object] | None = None
+        turnover_limit: float | None = None
+
+        pc = (
+            meta_db.query(PortfolioConstraints)
+            .filter(PortfolioConstraints.portfolio_id == portfolio.id)
+            .one_or_none()
+        )
+        if pc is not None:
+            constraints = {
+                "min_weight": pc.min_weight,
+                "max_weight": pc.max_weight,
+                "turnover_limit": pc.turnover_limit,
+                "target_volatility": pc.target_volatility,
+                "max_beta": pc.max_beta,
+                "sector_caps": pc.sector_caps_json,
+                "factor_constraints": pc.factor_constraints_json,
+            }
+            turnover_limit = pc.turnover_limit
+
+        # Fallback: derive max_weight from risk profile when not stored.
+        risk = portfolio.risk_profile_json or {}
+        max_pos_pct = risk.get("maxPositionSizePct")
+        if max_pos_pct is not None:
+            max_weight = float(max_pos_pct) / 100.0
+            if constraints is None:
+                constraints = {"max_weight": max_weight}
+            elif constraints.get("max_weight") is None:
+                constraints["max_weight"] = max_weight
+
+        return constraints, turnover_limit
+
+    @staticmethod
+    def _apply_turnover_limit(
+        *,
+        symbols: List[str],
+        previous_weights: Dict[str, float] | None,
+        new_weights: Dict[str, float],
+        turnover_limit: float | None,
+    ) -> Dict[str, float]:
+        """Scale weight changes to respect a simple turnover cap.
+
+        turnover = sum |w_new - w_old|
+        When turnover exceeds the configured limit, we scale deltas so that
+        turnover matches the limit while preserving directionality and then
+        renormalise to sum to 1.
+        """
+
+        if turnover_limit is None or turnover_limit <= 0.0:
+            return new_weights
+
+        prev = previous_weights or {}
+        deltas: Dict[str, float] = {}
+        turnover = 0.0
+        for sym in symbols:
+            w_old = float(prev.get(sym, 0.0))
+            w_new = float(new_weights.get(sym, 0.0))
+            delta = w_new - w_old
+            deltas[sym] = delta
+            turnover += abs(delta)
+
+        if turnover <= turnover_limit or turnover == 0.0:
+            return new_weights
+
+        scale = float(turnover_limit) / float(turnover)
+        adjusted: Dict[str, float] = {}
+        for sym in symbols:
+            w_old = float(prev.get(sym, 0.0))
+            delta = deltas.get(sym, 0.0) * scale
+            adjusted[sym] = w_old + delta
+
+        # Renormalise to 1.0 while ensuring weights are non-negative.
+        min_zero: Dict[str, float] = {s: max(0.0, w) for s, w in adjusted.items()}
+        total = sum(min_zero.values())
+        if total <= 0.0:
+            equal = 1.0 / float(len(symbols)) if symbols else 0.0
+            return {s: equal for s in symbols}
+        return {s: w / total for s, w in min_zero.items()}
+
+    @staticmethod
+    def _compute_cvar_95(
+        equity_curve: List[PortfolioEquityPoint],
+    ) -> float | None:
+        """Compute simple historical CVaR (95%) from equity curve."""
+
+        if len(equity_curve) < 2:
+            return None
+
+        returns: List[float] = []
+        for prev, curr in zip(equity_curve, equity_curve[1:], strict=False):
+            if prev.equity <= 0.0:
+                continue
+            ret = (curr.equity / prev.equity) - 1.0
+            returns.append(ret)
+
+        if not returns:
+            return None
+
+        returns.sort()
+        tail_count = max(int(len(returns) * 0.05), 1)
+        tail = returns[:tail_count]
+        return float(sum(tail) / float(len(tail)))
+
+    def _simulate_optimised_portfolio(
+        self,
+        *,
+        meta_db: Session,
+        prices_db: Session,
+        portfolio: Portfolio,
+        symbols: List[str],
+        price_data: Dict[str, pd.DataFrame],
+        timeline: List[datetime],
+        initial_capital: float,
+    ) -> tuple[
+        List[PortfolioEquityPoint],
+        List[float],
+        Dict[str, float],
+        Dict[str, float],
+        Dict[date, Dict[str, float]],
+        Dict[date, Dict[str, float]],
+        List[Dict[str, float]],
+    ]:
+        """Optimiser-driven portfolio simulation with scheduled rebalancing."""
+
+        if not timeline:
+            return ([], [], {}, {}, {}, {}, [])
+
+        rebalance_dates = self._build_rebalance_schedule(
+            timeline,
+            portfolio=portfolio,
+        )
+
+        constraints, turnover_limit = self._build_constraints_for_portfolio(
+            meta_db,
+            portfolio=portfolio,
+        )
+
+        # Basic sector metadata for exposures.
+        stocks = (
+            meta_db.query(Stock)
+            .filter(Stock.symbol.in_(symbols))  # type: ignore[arg-type]
+            .all()
+        )
+        sector_by_symbol: Dict[str, str] = {
+            s.symbol: (s.sector or "Unknown") for s in stocks
+        }
+
+        equity_curve: List[PortfolioEquityPoint] = []
+        utilisation_history: List[float] = []
+        holdings: Dict[str, float] = {sym: 0.0 for sym in symbols}
+        cash = float(initial_capital)
+
+        factor_exposures_ts: Dict[date, Dict[str, float]] = {}
+        sector_exposures_ts: Dict[date, Dict[str, float]] = {}
+        risk_metrics_by_rebalance: List[Dict[str, float]] = []
+
+        previous_weights: Dict[str, float] | None = None
+
+        rebalance_set = set(rebalance_dates)
+
+        for ts in timeline:
+            prices: Dict[str, float] = {}
+            for sym in symbols:
+                df = price_data[sym]
+                if ts not in df.index:
+                    continue
+                row = df.loc[ts]
+                if hasattr(row, "iloc") and not hasattr(row, "dtype"):
+                    price = float(row["close"].iloc[-1])
+                else:
+                    price = float(row["close"])
+                prices[sym] = price
+
+            if not prices:
+                if equity_curve:
+                    equity_curve.append(
+                        PortfolioEquityPoint(
+                            timestamp=ts,
+                            equity=equity_curve[-1].equity,
+                        )
+                    )
+                continue
+
+            # Mark-to-market before any rebalance on this timestamp.
+            nav_before = cash + sum(
+                holdings[sym] * prices.get(sym, 0.0) for sym in symbols
+            )
+
+            if ts in rebalance_set:
+                as_of = ts.date()
+                # Optimise weights as of this date using historical factors.
+                (
+                    weights_list,
+                    risk_metrics,
+                    _,
+                    _,
+                ) = self._optimizer_service.optimise_portfolio(
+                    meta_db=meta_db,
+                    prices_db=prices_db,
+                    portfolio_id=portfolio.id,
+                    as_of_date=as_of,
+                    optimizer_type=str(
+                        (portfolio.rebalance_policy_json or {}).get(
+                            "optimizer_type",
+                            "max_sharpe",
+                        )
+                    ),
+                    constraints=constraints,
+                    previous_weights=[
+                        {"symbol": s, "weight": w}
+                        for s, w in (previous_weights or {}).items()
+                    ]
+                    or None,
+                )
+
+                # Convert optimiser output into a symbol → weight mapping.
+                raw_weights: Dict[str, float] = {
+                    item["symbol"]: float(item["weight"]) for item in weights_list
+                }
+                # Apply simple turnover cap when configured.
+                adj_weights = self._apply_turnover_limit(
+                    symbols=symbols,
+                    previous_weights=previous_weights,
+                    new_weights=raw_weights,
+                    turnover_limit=turnover_limit,
+                )
+                previous_weights = adj_weights
+
+                # Translate target weights into holdings in shares.
+                new_holdings: Dict[str, float] = {}
+                for sym in symbols:
+                    price = prices.get(sym)
+                    if price is None or price <= 0.0:
+                        new_holdings[sym] = 0.0
+                        continue
+                    w = float(adj_weights.get(sym, 0.0))
+                    notional = nav_before * w
+                    shares = notional / price
+                    new_holdings[sym] = float(shares)
+
+                invested = sum(
+                    new_holdings[sym] * prices.get(sym, 0.0) for sym in symbols
+                )
+                cash = nav_before - invested
+                holdings = new_holdings
+
+                # Persist factor and sector exposures for this rebalance date.
+                # Factor exposures are recomputed using the final weights and
+                # stored per PRD.
+                exposures_for_date: Dict[str, float] = {}
+                rows = (
+                    meta_db.query(FactorExposure)
+                    .filter(
+                        FactorExposure.symbol.in_(symbols),  # type: ignore[arg-type]
+                        FactorExposure.as_of_date == as_of,
+                    )
+                    .all()
+                )
+                by_symbol = {row.symbol: row for row in rows}
+                factor_names = ["value", "quality", "momentum", "low_vol", "size"]
+                for fname in factor_names:
+                    total = 0.0
+                    for sym in symbols:
+                        w = float(adj_weights.get(sym, 0.0))
+                        f_row = by_symbol.get(sym)
+                        if f_row is None:
+                            continue
+                        val = getattr(f_row, fname, None)
+                        if val is None:
+                            continue
+                        total += w * float(val)
+                    exposures_for_date[fname] = total
+                factor_exposures_ts[as_of] = exposures_for_date
+
+                sector_weights: Dict[str, float] = {}
+                for sym in symbols:
+                    sector = sector_by_symbol.get(sym, "Unknown")
+                    w = float(adj_weights.get(sym, 0.0))
+                    sector_weights[sector] = sector_weights.get(sector, 0.0) + w
+                sector_exposures_ts[as_of] = sector_weights
+
+                risk_metrics_by_rebalance.append(
+                    {k: float(v) for k, v in risk_metrics.items()}
+                )
+
+            # NAV after any rebalance at this timestamp.
+            nav_after = cash + sum(
+                holdings[sym] * prices.get(sym, 0.0) for sym in symbols
+            )
+            equity_curve.append(PortfolioEquityPoint(timestamp=ts, equity=nav_after))
+
+            invested_notional = sum(
+                holdings[sym] * prices.get(sym, 0.0) for sym in symbols
+            )
+            utilisation = invested_notional / nav_after if nav_after > 0.0 else 0.0
+            utilisation_history.append(utilisation)
+
+        # Snapshot of final prices for contribution calculations.
+        final_prices: Dict[str, float] = {}
+        if timeline:
+            last_ts = timeline[-1]
+            for sym in symbols:
+                df = price_data[sym]
+                if last_ts in df.index:
+                    row = df.loc[last_ts]
+                    if hasattr(row, "iloc") and not hasattr(row, "dtype"):
+                        price = float(row["close"].iloc[-1])
+                    else:
+                        price = float(row["close"])
+                    final_prices[sym] = price
+
+        return (
+            equity_curve,
+            utilisation_history,
+            holdings,
+            final_prices,
+            factor_exposures_ts,
+            sector_exposures_ts,
+            risk_metrics_by_rebalance,
+        )

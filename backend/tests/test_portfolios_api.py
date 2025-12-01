@@ -1,10 +1,18 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import Stock, StockGroup, StockGroupMember
+from app.models import (
+    BacktestFactorExposure,
+    BacktestSectorExposure,
+    FundamentalsSnapshot,
+    PortfolioBacktest,
+    Stock,
+    StockGroup,
+    StockGroupMember,
+)
 from app.prices_database import PricesBase, PricesSessionLocal, prices_engine
 from app.prices_models import PriceBar
 
@@ -220,3 +228,193 @@ def test_portfolio_backtest_read_shape() -> None:
 
     meta_session.close()
     prices_session.close()
+
+
+def test_portfolio_backtest_persists_exposures() -> None:
+    """Portfolio backtests should persist factor and sector exposures."""
+
+    created = _create_sample_portfolio(code="BT_EXPOSURES")
+    portfolio_id = created["id"]
+
+    meta_session = SessionLocal()
+    prices_session = PricesSessionLocal()
+
+    try:
+        # Universe with two stocks in different sectors.
+        stocks: list[Stock] = []
+        for sym, sector in (("PF_A", "SECT_A"), ("PF_B", "SECT_B")):
+            stock = (
+                meta_session.query(Stock)
+                .filter(Stock.symbol == sym, Stock.exchange == "NSE")
+                .first()
+            )
+            if stock is None:
+                stock = Stock(
+                    symbol=sym,
+                    exchange="NSE",
+                    segment="equity",
+                    name=f"Portfolio {sym}",
+                    sector=sector,
+                )
+                meta_session.add(stock)
+                meta_session.commit()
+                meta_session.refresh(stock)
+            stocks.append(stock)
+
+        group = (
+            meta_session.query(StockGroup)
+            .filter(StockGroup.code == "PF_GRP_EXPO")
+            .one_or_none()
+        )
+        if group is None:
+            group = StockGroup(code="PF_GRP_EXPO", name="Portfolio Group Exposures")
+            meta_session.add(group)
+            meta_session.commit()
+            meta_session.refresh(group)
+
+        for stock in stocks:
+            link = (
+                meta_session.query(StockGroupMember)
+                .filter(
+                    StockGroupMember.group_id == group.id,
+                    StockGroupMember.stock_id == stock.id,
+                )
+                .one_or_none()
+            )
+            if link is None:
+                meta_session.add(StockGroupMember(group_id=group.id, stock_id=stock.id))
+        meta_session.commit()
+
+        # Attach portfolio to this group.
+        resp = client.put(
+            f"/api/portfolios/{portfolio_id}",
+            json={"universe_scope": f"group:{group.id}"},
+        )
+        assert resp.status_code == 200
+
+        # Fundamentals snapshot for factor construction.
+        as_of = datetime(2024, 2, 1, tzinfo=timezone.utc).date()
+        for stock, pe in zip(stocks, (10.0, 20.0), strict=False):
+            existing = (
+                meta_session.query(FundamentalsSnapshot)
+                .filter(
+                    FundamentalsSnapshot.symbol == stock.symbol,
+                    FundamentalsSnapshot.as_of_date == as_of,
+                )
+                .one_or_none()
+            )
+            if existing is None:
+                meta_session.add(
+                    FundamentalsSnapshot(
+                        symbol=stock.symbol,
+                        as_of_date=as_of,
+                        market_cap=1_000.0,
+                        pe=pe,
+                        pb=3.0,
+                        ps=2.0,
+                        roe=18.0,
+                        roce=18.0,
+                        debt_to_equity=0.5,
+                        sales_growth_yoy=10.0,
+                        profit_growth_yoy=10.0,
+                        eps_growth_3y=8.0,
+                        operating_margin=20.0,
+                        net_margin=15.0,
+                        interest_coverage=5.0,
+                        promoter_holding=60.0,
+                        fii_holding=10.0,
+                        dii_holding=8.0,
+                        sector=stock.sector,
+                        industry="TEST_IND",
+                    )
+                )
+        meta_session.commit()
+
+        # Seed daily prices for both symbols with a modest history so that
+        # factor and risk lookbacks have data to work with.
+        start_prices = datetime(2023, 11, 1, tzinfo=timezone.utc)
+        end_prices = datetime(2024, 2, 10, tzinfo=timezone.utc)
+        prices_session.query(PriceBar).filter(
+            PriceBar.symbol.in_([s.symbol for s in stocks]),  # type: ignore[arg-type]
+            PriceBar.timeframe == "1d",
+        ).delete(synchronize_session=False)
+
+        cur = start_prices
+        i = 0
+        while cur <= end_prices:
+            for stock in stocks:
+                base = 100.0 + i
+                prices_session.add(
+                    PriceBar(
+                        symbol=stock.symbol,
+                        exchange="NSE",
+                        timeframe="1d",
+                        timestamp=cur,
+                        open=base,
+                        high=base,
+                        low=base,
+                        close=base,
+                        volume=1_000,
+                        source="synthetic",
+                    )
+                )
+            cur += timedelta(days=1)
+            i += 1
+        prices_session.commit()
+
+        # Run portfolio backtest over a window that includes the fundamentals
+        # as-of date so that at least one rebalance has factor data.
+        bt_start = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        bt_end = datetime(2024, 2, 10, tzinfo=timezone.utc)
+        resp_bt = client.post(
+            f"/api/portfolios/{portfolio_id}/backtests",
+            params={
+                "timeframe": "1d",
+                "start": bt_start.isoformat(),
+                "end": bt_end.isoformat(),
+                "initial_capital": 100_000.0,
+            },
+        )
+        assert resp_bt.status_code == 201, resp_bt.text
+        bt_payload = resp_bt.json()
+        bt_id = bt_payload["id"]
+
+        # Fetch backtest from the meta DB to confirm metrics and exposure rows.
+        bt_row = meta_session.get(PortfolioBacktest, bt_id)
+        assert bt_row is not None
+        metrics = bt_row.metrics_json or {}
+        assert "equity_curve" in metrics
+
+        factor_rows = (
+            meta_session.query(BacktestFactorExposure)
+            .filter(BacktestFactorExposure.backtest_id == bt_id)
+            .all()
+        )
+        sector_rows = (
+            meta_session.query(BacktestSectorExposure)
+            .filter(BacktestSectorExposure.backtest_id == bt_id)
+            .all()
+        )
+
+        assert factor_rows, "Expected factor exposures persisted for backtest."
+        assert sector_rows, "Expected sector exposures persisted for backtest."
+
+        # Factor rows should have at least one non-null factor value and the
+        # sector rows should sum close to 1.0 for a given date.
+        any_factor_non_null = any(
+            fr.value is not None
+            or fr.quality is not None
+            or fr.momentum is not None
+            or fr.low_vol is not None
+            or fr.size is not None
+            for fr in factor_rows
+        )
+        assert any_factor_non_null
+
+        by_date: dict[date, float] = {}
+        for row in sector_rows:
+            by_date[row.date] = by_date.get(row.date, 0.0) + float(row.weight)
+        assert any(abs(total - 1.0) < 1e-6 for total in by_date.values())
+    finally:
+        meta_session.close()
+        prices_session.close()

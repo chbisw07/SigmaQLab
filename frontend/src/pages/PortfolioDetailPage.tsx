@@ -692,6 +692,8 @@ export const PortfolioDetailPage = () => {
       (metrics.volatility as number | undefined) ??
       (metrics.annual_volatility as number | undefined) ??
       0;
+    const beta =
+      (metrics.beta as number | undefined) ?? 0;
 
     return (
       <Box sx={{ mt: 2 }}>
@@ -773,10 +775,10 @@ export const PortfolioDetailPage = () => {
             <Card>
               <CardContent>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Sharpe / Vol
+                  Sharpe / Vol / Beta
                 </Typography>
                 <Typography variant="h6">
-                  {sharpe.toFixed(2)} / {vol.toFixed(4)}
+                  {sharpe.toFixed(2)} / {vol.toFixed(4)} / {beta.toFixed(2)}
                 </Typography>
               </CardContent>
             </Card>
@@ -1704,6 +1706,8 @@ export const PortfolioDetailPage = () => {
       (metrics.sortino as number | undefined) ??
       0;
     const maxDd = (metrics.max_drawdown as number | undefined) ?? 0;
+    const beta = (metrics.beta as number | undefined) ?? 0;
+    const cvar95 = (metrics.cvar_95 as number | undefined) ?? 0;
 
     return (
       <Box sx={{ mt: 2 }}>
@@ -1724,6 +1728,12 @@ export const PortfolioDetailPage = () => {
               </Typography>
               <Typography variant="body2">
                 Max drawdown: {maxDd.toFixed(2)}%
+              </Typography>
+              <Typography variant="body2">
+                Beta: {beta.toFixed(3)}
+              </Typography>
+              <Typography variant="body2">
+                CVaR (95%): {(cvar95 * 100).toFixed(2)}%
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Future iterations will extend this panel with VaR-like metrics
