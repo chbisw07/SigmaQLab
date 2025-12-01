@@ -101,6 +101,164 @@ class PriceBarPreview(BaseModel):
 
 
 # -------------------------
+# Factor & risk data schemas
+# -------------------------
+
+
+class FactorSymbolsRequest(BaseModel):
+    """Request payload for factor/fundamental/risk lookups."""
+
+    symbols: list[str]
+    as_of_date: date
+
+
+class FactorExposureRead(BaseModel):
+    """Factor exposure vector returned by the API."""
+
+    value: float | None = None
+    quality: float | None = None
+    momentum: float | None = None
+    low_vol: float | None = None
+    size: float | None = None
+    composite: float | None = Field(
+        default=None,
+        validation_alias="composite_score",
+    )
+
+    model_config = SettingsConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class FundamentalsRead(BaseModel):
+    """Subset of fundamentals exposed via the Factor Data API."""
+
+    pe: float | None = None
+    pb: float | None = None
+    ps: float | None = None
+    roe: float | None = None
+    roce: float | None = None
+    debt_to_equity: float | None = None
+    sales_growth_yoy: float | None = None
+    profit_growth_yoy: float | None = None
+    eps_growth_3y: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    interest_coverage: float | None = None
+    promoter_holding: float | None = None
+    fii_holding: float | None = None
+    dii_holding: float | None = None
+    sector: str | None = None
+    industry: str | None = None
+
+    model_config = SettingsConfigDict(from_attributes=True)
+
+
+class RiskRead(BaseModel):
+    """Risk metrics per symbol from the risk model."""
+
+    volatility: float | None = None
+    beta: float | None = None
+    tail_beta: float | None = None
+    skew: float | None = None
+    kurtosis: float | None = None
+
+    model_config = SettingsConfigDict(from_attributes=True)
+
+
+class CovarianceMatrixResponse(BaseModel):
+    """Covariance and correlation matrix for a symbol universe."""
+
+    symbols: list[str]
+    cov_matrix: list[list[float]]
+    corr_matrix: list[list[float]]
+
+
+# -------------------------
+# Screener schemas
+# -------------------------
+
+
+class ScreenerFilter(BaseModel):
+    """Single screener filter condition."""
+
+    field: str = Field(
+        ...,
+        description="Field name, e.g. PE, ROE, Value, Momentum.",
+    )
+    op: Literal["<", "<=", ">", ">=", "=", "=="] = Field(
+        ...,
+        description="Comparison operator.",
+    )
+    value: float = Field(..., description="Numeric threshold for the filter.")
+
+
+class ScreenerRankingField(BaseModel):
+    """Ranking specification for a single field."""
+
+    field: str = Field(
+        ...,
+        description="Field name to rank by, e.g. Composite, Value, ROE.",
+    )
+    order: Literal["asc", "desc"] = Field(
+        "desc",
+        description="Sort order: asc or desc.",
+    )
+
+
+class ScreenerRankingConfig(BaseModel):
+    """Primary/secondary ranking configuration."""
+
+    primary: ScreenerRankingField
+    secondary: ScreenerRankingField | None = None
+    limit: int | None = Field(
+        default=None,
+        description="Optional maximum number of results to return.",
+    )
+
+
+class ScreenerRunRequest(BaseModel):
+    """Request payload for running the factor/fundamental screener."""
+
+    universe: str = Field(
+        "NSE_ALL",
+        description="Universe identifier, e.g. NSE_ALL or a future custom code.",
+    )
+    as_of_date: date
+    filters: list[ScreenerFilter] = Field(
+        default_factory=list,
+        description="List of filter conditions combined with AND semantics.",
+    )
+    ranking: ScreenerRankingConfig | None = None
+
+
+class ScreenerResultItem(BaseModel):
+    """Single screener result row."""
+
+    symbol: str
+    sector: str | None = None
+    market_cap: float | None = None
+    value: float | None = None
+    quality: float | None = None
+    momentum: float | None = None
+    low_vol: float | None = None
+    size: float | None = None
+
+
+class CreateGroupFromScreenerRequest(BaseModel):
+    """Payload for creating a stock group from screener results."""
+
+    name: str
+    description: str | None = None
+    symbols: list[str]
+
+
+class CreateGroupFromScreenerResponse(BaseModel):
+    """Response returned when creating a group from screener results."""
+
+    group_id: int
+    status: str = "success"
+
+
+# -------------------------
 # Strategy service schemas
 # -------------------------
 

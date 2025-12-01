@@ -4,9 +4,11 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -183,6 +185,131 @@ class Stock(Base):
     )
 
     group_memberships = relationship("StockGroupMember", back_populates="stock")
+
+
+class FundamentalsSnapshot(Base):
+    """Snapshot of fundamental metrics for a symbol as of a specific date."""
+
+    __tablename__ = "fundamentals_snapshot"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, ForeignKey("stocks.symbol"), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    market_cap = Column(Float, nullable=True)
+    pe = Column(Float, nullable=True)
+    pb = Column(Float, nullable=True)
+    ps = Column(Float, nullable=True)
+    roe = Column(Float, nullable=True)
+    roce = Column(Float, nullable=True)
+    debt_to_equity = Column(Float, nullable=True)
+    sales_growth_yoy = Column(Float, nullable=True)
+    profit_growth_yoy = Column(Float, nullable=True)
+    eps_growth_3y = Column(Float, nullable=True)
+    operating_margin = Column(Float, nullable=True)
+    net_margin = Column(Float, nullable=True)
+    interest_coverage = Column(Float, nullable=True)
+    promoter_holding = Column(Float, nullable=True)
+    fii_holding = Column(Float, nullable=True)
+    dii_holding = Column(Float, nullable=True)
+    sector = Column(String, nullable=True)
+    industry = Column(String, nullable=True)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_fundamentals_snapshot_symbol_as_of_date",
+            "symbol",
+            "as_of_date",
+        ),
+        Index(
+            "ix_fundamentals_snapshot_as_of_date",
+            "as_of_date",
+        ),
+    )
+
+    stock = relationship("Stock")
+
+
+class FactorExposure(Base):
+    """Normalized factor exposures for a symbol."""
+
+    __tablename__ = "factor_exposures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, ForeignKey("stocks.symbol"), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    value = Column(Float, nullable=True)
+    quality = Column(Float, nullable=True)
+    momentum = Column(Float, nullable=True)
+    low_vol = Column(Float, nullable=True)
+    size = Column(Float, nullable=True)
+    composite_score = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_factor_exposures_symbol_as_of_date",
+            "symbol",
+            "as_of_date",
+        ),
+        Index(
+            "ix_factor_exposures_as_of_date",
+            "as_of_date",
+        ),
+    )
+
+    stock = relationship("Stock")
+
+
+class RiskModel(Base):
+    """Per-symbol risk metrics used by the optimizer."""
+
+    __tablename__ = "risk_model"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, ForeignKey("stocks.symbol"), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    volatility = Column(Float, nullable=True)
+    beta = Column(Float, nullable=True)
+    tail_beta = Column(Float, nullable=True)
+    skew = Column(Float, nullable=True)
+    kurtosis = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_risk_model_symbol_as_of_date",
+            "symbol",
+            "as_of_date",
+        ),
+        Index(
+            "ix_risk_model_as_of_date",
+            "as_of_date",
+        ),
+    )
+
+    stock = relationship("Stock")
+
+
+class CovarianceMatrix(Base):
+    """Stored covariance matrices keyed by as-of date and universe definition."""
+
+    __tablename__ = "covariance_matrices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    universe_hash = Column(String, nullable=False, index=True)
+    matrix_blob = Column(JSON, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_covariance_matrices_as_of_date_universe_hash",
+            "as_of_date",
+            "universe_hash",
+        ),
+    )
 
 
 class StockGroup(Base):

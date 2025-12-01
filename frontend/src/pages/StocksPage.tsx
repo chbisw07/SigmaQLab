@@ -23,11 +23,12 @@ import { DataGrid, type GridColDef, type GridSelectionModel } from "@mui/x-data-
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { GroupsTab } from "../features/groups/GroupsTab";
+import { FactorScreenerTab } from "../features/screener/FactorScreenerTab";
 import { type Stock, type StockGroupSummary } from "../types/stocks";
 
 export type FetchState = "idle" | "loading" | "success" | "error";
 
-type TabId = "universe" | "groups" | "imports";
+type TabId = "universe" | "screener" | "groups" | "imports";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -121,7 +122,12 @@ export const StocksPage = () => {
     const tabParam = params.get("tab") as TabId | null;
     const groupParam = params.get("group");
 
-    if (tabParam === "universe" || tabParam === "groups" || tabParam === "imports") {
+    if (
+      tabParam === "universe" ||
+      tabParam === "screener" ||
+      tabParam === "groups" ||
+      tabParam === "imports"
+    ) {
       setTab(tabParam);
     } else {
       setTab("universe");
@@ -163,7 +169,10 @@ export const StocksPage = () => {
 
   const handleViewImportedGroup = () => {
     if (!lastImportedGroupCode) return;
-    const code = lastImportedGroupCode;
+    handleViewGroupFromCode(lastImportedGroupCode);
+  };
+
+  const handleViewGroupFromCode = (code: string) => {
     const params = new URLSearchParams(location.search);
     params.set("tab", "groups");
     params.set("group", code);
@@ -615,8 +624,9 @@ export const StocksPage = () => {
         sx={{ mb: 2 }}
       >
         <Tab label="Universe" value="universe" />
+        <Tab label="Factor Screener" value="screener" />
         <Tab label="Groups" value="groups" />
-         <Tab label="Imports" value="imports" />
+        <Tab label="Imports" value="imports" />
       </Tabs>
 
       <Dialog
@@ -1104,6 +1114,17 @@ export const StocksPage = () => {
           stocks={stocks}
           activeGroupCode={activeGroupCode}
           onGroupSelectionChange={handleGroupSelectionChange}
+        />
+      )}
+
+      {tab === "screener" && (
+        <FactorScreenerTab
+          apiBase={API_BASE}
+          onGroupCreated={(code) => {
+            setLastImportedGroupCode(code);
+            void loadGroups();
+            handleViewGroupFromCode(code);
+          }}
         />
       )}
     </Box>

@@ -9,8 +9,10 @@ from .prices_database import PricesBase, ensure_schema_migrations, prices_engine
 from .routers import backtests as backtests_router
 from .routers import data as data_router
 from .routers import portfolios as portfolios_router
+from .routers import factors as factors_router
 from .routers import stocks as stocks_router
 from .routers import strategies as strategies_router
+from .routers import screener as screener_router
 from .seed import seed_example_stock_groups, seed_preset_strategies
 
 
@@ -58,6 +60,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(strategies_router.router)
     app.include_router(portfolios_router.router)
     app.include_router(backtests_router.router)
+    app.include_router(factors_router.router)
+    app.include_router(screener_router.router)
 
     return app
 
