@@ -228,43 +228,73 @@ export const FactorScreenerTab = ({ apiBase, onGroupCreated }: FactorScreenerTab
         field: "market_cap",
         headerName: "Mkt cap (cr)",
         width: 130,
-        valueFormatter: (params) =>
-          params.value != null ? Number(params.value).toFixed(0) : ""
+        type: "number",
+        renderCell: (params) => {
+          const v = params.value as number | null | undefined;
+          return (
+            <span>{v != null ? Number(v).toFixed(0) : ""}</span>
+          );
+        }
       },
       {
         field: "value",
         headerName: "Value",
         width: 110,
-        valueFormatter: (params) =>
-          params.value != null ? Number(params.value).toFixed(2) : ""
+        type: "number",
+        renderCell: (params) => {
+          const v = params.value as number | null | undefined;
+          return (
+            <span>{v != null ? Number(v).toFixed(2) : ""}</span>
+          );
+        }
       },
       {
         field: "quality",
         headerName: "Quality",
         width: 110,
-        valueFormatter: (params) =>
-          params.value != null ? Number(params.value).toFixed(2) : ""
+        type: "number",
+        renderCell: (params) => {
+          const v = params.value as number | null | undefined;
+          return (
+            <span>{v != null ? Number(v).toFixed(2) : ""}</span>
+          );
+        }
       },
       {
         field: "momentum",
         headerName: "Momentum",
         width: 110,
-        valueFormatter: (params) =>
-          params.value != null ? Number(params.value).toFixed(2) : ""
+        type: "number",
+        renderCell: (params) => {
+          const v = params.value as number | null | undefined;
+          return (
+            <span>{v != null ? Number(v).toFixed(2) : ""}</span>
+          );
+        }
       },
       {
         field: "low_vol",
         headerName: "Low-Vol",
         width: 110,
-        valueFormatter: (params) =>
-          params.value != null ? Number(params.value).toFixed(2) : ""
+        type: "number",
+        renderCell: (params) => {
+          const v = params.value as number | null | undefined;
+          return (
+            <span>{v != null ? Number(v).toFixed(2) : ""}</span>
+          );
+        }
       },
       {
         field: "size",
         headerName: "Size",
         width: 110,
-        valueFormatter: (params) =>
-          params.value != null ? Number(params.value).toFixed(2) : ""
+        type: "number",
+        renderCell: (params) => {
+          const v = params.value as number | null | undefined;
+          return (
+            <span>{v != null ? Number(v).toFixed(2) : ""}</span>
+          );
+        }
       }
     ],
     []
@@ -278,6 +308,15 @@ export const FactorScreenerTab = ({ apiBase, onGroupCreated }: FactorScreenerTab
           <Typography variant="body2" color="text.secondary">
             Apply factor and fundamental filters to the active universe and rank
             candidates for portfolio construction.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Factors are cross-sectional z-scores for each as-of date:
+            Value (cheaper valuation is higher), Quality (stronger profitability
+            and balance sheet is higher), Momentum (stronger recent returns is
+            higher), Low-Vol (more defensive, lower volatility is higher),
+            Size (larger market cap is higher). Composite is a weighted blend
+            of these; in all cases, higher scores are better within the same
+            date.
           </Typography>
         </Box>
         <Paper sx={{ p: 2 }}>
