@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -9,11 +11,13 @@ from ..prices_database import get_prices_db
 from ..schemas import (
     CovarianceMatrixResponse,
     FactorExposureRead,
+    FactorRebuildRequest,
+    FactorRebuildResponse,
     FactorSymbolsRequest,
     FundamentalsRead,
     RiskRead,
 )
-from ..services import FactorService, RiskModelService
+from ..services import FactorRiskRebuildService, FactorService, RiskModelService
 
 router = APIRouter(prefix="/api/v1/factors", tags=["Factors"])
 
@@ -176,4 +180,36 @@ async def get_covariance_matrix(
         symbols=symbols,
         cov_matrix=cov_matrix,
         corr_matrix=corr_matrix,
+    )
+
+
+@router.post("/rebuild", response_model=FactorRebuildResponse)
+async def rebuild_factors_and_risk(
+    payload: FactorRebuildRequest,
+    meta_db: Session = Depends(get_db),
+    prices_db: Session = Depends(get_prices_db),
+) -> FactorRebuildResponse:
+    """Recompute factor and risk model data for a universe and date."""
+
+    service = FactorRiskRebuildService()
+    try:
+        summary = service.rebuild_for_universe(
+            meta_db=meta_db,
+            prices_db=prices_db,
+            universe=payload.universe,
+            as_of_date=payload.as_of_date,
+            timeframe=payload.timeframe,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return FactorRebuildResponse(
+        universe=summary["universe"],
+        as_of_date=date.fromisoformat(summary["as_of_date"]),
+        timeframe=summary["timeframe"],
+        symbols_requested=summary["symbols_requested"],
+        symbols_with_prices=summary["symbols_with_prices"],
+        symbols_without_prices=summary["symbols_without_prices"],
+        factor_rows_written=summary["factor_rows_written"],
+        risk_rows_written=summary["risk_rows_written"],
     )

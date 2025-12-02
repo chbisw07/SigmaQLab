@@ -172,6 +172,38 @@ class CovarianceMatrixResponse(BaseModel):
     corr_matrix: list[list[float]]
 
 
+class FactorRebuildRequest(BaseModel):
+    """Request to recompute factors and risk for a universe/date."""
+
+    universe: str = Field(
+        "NSE_ALL",
+        description=(
+            "Universe identifier: 'NSE_ALL', 'group:<id>', "
+            "or comma-separated symbols."
+        ),
+    )
+    as_of_date: date
+    timeframe: str = Field(
+        "1d",
+        description=(
+            "Timeframe used when loading price history " "for factor/risk computation."
+        ),
+    )
+
+
+class FactorRebuildResponse(BaseModel):
+    """Summary of a factor/risk rebuild operation."""
+
+    universe: str
+    as_of_date: date
+    timeframe: str
+    symbols_requested: int
+    symbols_with_prices: int
+    symbols_without_prices: list[str]
+    factor_rows_written: int
+    risk_rows_written: int
+
+
 class BacktestFactorExposurePoint(BaseModel):
     """Single factor exposure observation for a backtest."""
 

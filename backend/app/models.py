@@ -234,6 +234,25 @@ class FundamentalsSnapshot(Base):
     stock = relationship("Stock")
 
 
+class FundamentalsSnapshotRun(Base):
+    """Lineage metadata for fundamentals ingestion runs."""
+
+    __tablename__ = "fundamentals_snapshot_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    source = Column(String, nullable=False)  # e.g. 'screener_csv'
+    csv_filename = Column(String, nullable=True)
+    report_type = Column(String, nullable=True)  # consolidated / standalone / unknown
+    ingested_symbol_count = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
 class FactorExposure(Base):
     """Normalized factor exposures for a symbol."""
 

@@ -1060,6 +1060,106 @@ class RiskModelService:
         return risk_rows
 
 
+class FactorRiskRebuildService:
+    """Orchestration helper to recompute factors and risk for a universe/date."""
+
+    def __init__(
+        self,
+        *,
+        factor_service: FactorService | None = None,
+        risk_service: RiskModelService | None = None,
+    ) -> None:
+        self._factor_service = factor_service or FactorService()
+        self._risk_service = risk_service or RiskModelService()
+
+    def _resolve_universe_symbols(self, meta_db: Session, universe: str) -> List[str]:
+        universe_norm = (universe or "").strip()
+        if not universe_norm or universe_norm.upper() == "NSE_ALL":
+            rows = (
+                meta_db.query(Stock)
+                .filter(Stock.is_active.is_(True))
+                .order_by(Stock.symbol.asc())
+                .all()
+            )
+            return [row.symbol for row in rows]
+
+        if universe_norm.startswith("group:"):
+            _, group_id_str = universe_norm.split(":", 1)
+            try:
+                group_id = int(group_id_str)
+            except ValueError as exc:  # pragma: no cover - validated via API
+                msg = f"Invalid group id in universe: {universe_norm}"
+                raise ValueError(msg) from exc
+            rows = (
+                meta_db.query(Stock)
+                .join(StockGroupMember, StockGroupMember.stock_id == Stock.id)
+                .filter(StockGroupMember.group_id == group_id)
+                .order_by(Stock.symbol.asc())
+                .all()
+            )
+            return [row.symbol for row in rows]
+
+        # Fallback: treat as a comma-separated list of symbols.
+        symbols = [s.strip().upper() for s in universe_norm.split(",") if s.strip()]
+        if not symbols:
+            msg = f"Unsupported universe format: {universe}"
+            raise ValueError(msg)
+        return symbols
+
+    def rebuild_for_universe(
+        self,
+        meta_db: Session,
+        prices_db: Session,
+        *,
+        universe: str,
+        as_of_date: date,
+        timeframe: str = "1d",
+    ) -> dict:
+        """Compute factors and risk for the given universe and date."""
+
+        symbols = self._resolve_universe_symbols(meta_db, universe)
+        if not symbols:
+            msg = "Universe resolved to an empty symbol list"
+            raise ValueError(msg)
+
+        exposures = self._factor_service.compute_and_store_exposures(
+            meta_db=meta_db,
+            prices_db=prices_db,
+            symbols=symbols,
+            as_of_date=as_of_date,
+            timeframe=timeframe,
+        )
+        risk_rows = self._risk_service.compute_and_store_risk(
+            meta_db=meta_db,
+            prices_db=prices_db,
+            symbols=symbols,
+            as_of_date=as_of_date,
+            timeframe=timeframe,
+        )
+
+        returns_by_symbol = self._risk_service._load_returns_matrix(  # type: ignore[attr-defined]
+            prices_db,
+            symbols=symbols,
+            timeframe=timeframe,
+            as_of=as_of_date,
+        )
+        symbols_with_prices = sorted(returns_by_symbol.keys())
+        symbols_without_prices = sorted(
+            s for s in symbols if s not in returns_by_symbol
+        )
+
+        return {
+            "universe": universe,
+            "as_of_date": as_of_date.isoformat(),
+            "timeframe": timeframe,
+            "symbols_requested": len(symbols),
+            "symbols_with_prices": len(symbols_with_prices),
+            "symbols_without_prices": symbols_without_prices,
+            "factor_rows_written": len(exposures),
+            "risk_rows_written": len(risk_rows),
+        }
+
+
 class ScreenerService:
     """Service responsible for applying screener filters and rankings."""
 

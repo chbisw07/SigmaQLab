@@ -1,0 +1,20 @@
+One‑off or daily fundamentals ingest:
+
+cd backend
+python scripts/ingest_screener_fundamentals.py \
+  --csv-path data/fundamentals/latest_screener.csv \
+  --as-of-date 2025-02-12
+
+=======================================================================
+Rebuild factors & risk for a universe/date (via API):
+
+curl -X POST http://127.0.0.1:8000/api/v1/factors/rebuild \
+  -H "Content-Type: application/json" \
+  -d '{
+    "universe": "NSE_ALL",
+    "as_of_date": "2025-02-12",
+    "timeframe": "1d"
+  }'
+
+
+This gives you exactly what you asked for: a repeatable fundamentals ingestion path based on Screener CSV, plus a clean service/endpoint to refresh factors and risk for any universe and as_of_date.
