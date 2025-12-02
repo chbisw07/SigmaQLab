@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from .models import FundamentalsSnapshot, FundamentalsSnapshotRun, Stock
+from .routers.stocks import _classify_segment_from_market_cap
 from .symbol_resolution import ResolvedSymbol, resolve_symbol
 
 
@@ -246,6 +247,16 @@ class FundamentalsIngestionService:
                 snapshot.dii_holding = dii
                 snapshot.sector = sector
                 snapshot.industry = industry
+
+                # Keep basic market-cap and segment metadata on the Stock row in
+                # sync with the latest fundamentals snapshot so that the
+                # universe view can show market caps without needing to join.
+                if market_cap is not None:
+                    stock.market_cap_crore = market_cap
+                    segment_value = _classify_segment_from_market_cap(market_cap)
+                    if segment_value is not None:
+                        stock.segment = segment_value
+                meta_db.add(stock)
 
                 symbols_processed += 1
 

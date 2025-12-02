@@ -63,6 +63,10 @@ def test_ingest_screener_csv_creates_snapshot_and_run() -> None:
         stock = session.query(Stock).filter(Stock.symbol == "TESTSYM").one_or_none()
         assert stock is not None
         assert stock.sector == "IT"
+        # Market cap and segment should be mirrored onto the Stock row so
+        # the universe grid can display them without additional joins.
+        assert stock.market_cap_crore == 1000.0
+        assert stock.segment == "micro-cap"
 
         snapshot = (
             session.query(FundamentalsSnapshot)
@@ -73,6 +77,7 @@ def test_ingest_screener_csv_creates_snapshot_and_run() -> None:
             .one_or_none()
         )
         assert snapshot is not None
+        assert snapshot.market_cap == 1000.0
         assert snapshot.pe == 20.0
         assert snapshot.pb == 4.0
         assert snapshot.roe == 15.0
