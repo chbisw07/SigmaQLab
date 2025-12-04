@@ -965,6 +965,14 @@ class PortfolioWeightItem(BaseModel):
 
     symbol: str
     weight: float
+    # Optional metadata for client-side previews. These are ignored when
+    # persisting weights but allow the optimiser to surface richer context.
+    sector: str | None = None
+    value: float | None = None
+    quality: float | None = None
+    momentum: float | None = None
+    low_vol: float | None = None
+    size: float | None = None
 
 
 class PortfolioOptimizeRequest(BaseModel):

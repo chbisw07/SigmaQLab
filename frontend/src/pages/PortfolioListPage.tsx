@@ -108,6 +108,9 @@ export const PortfolioListPage = () => {
   const [groups, setGroups] = useState<StockGroup[]>([]);
   const [loadState, setLoadState] = useState<FetchState>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [latestMetrics, setLatestMetrics] = useState<
+    Record<number, { pnlPct: number | null; sharpe: number | null }>
+  >({});
 
   const [search, setSearch] = useState("");
   const [universeFilter, setUniverseFilter] = useState<string>("all");
@@ -167,6 +170,53 @@ export const PortfolioListPage = () => {
           const gData: StockGroup[] = await grpRes.json();
           setGroups(gData);
         }
+        // For each portfolio, attempt to fetch the most recent backtest
+        // and derive last PnL % and Sharpe for the list view.
+        const metricsById: Record<
+          number,
+          { pnlPct: number | null; sharpe: number | null }
+        > = {};
+        await Promise.all(
+          pfData.map(async (p) => {
+            try {
+              const btRes = await fetch(
+                `${API_BASE}/api/portfolios/${p.id}/backtests?limit=1`
+              );
+              if (!btRes.ok) {
+                return;
+              }
+              const backtests: PortfolioBacktest[] = await btRes.json();
+              if (!backtests.length) return;
+              const bt = backtests[0];
+              const m = (bt.metrics ?? {}) as Record<string, unknown>;
+              const initial =
+                (m.initial_capital as number | undefined) ??
+                bt.initial_capital ??
+                0;
+              let pnlPct: number | null = null;
+              const totalRet = m.total_return as number | undefined;
+              if (typeof totalRet === "number" && Number.isFinite(totalRet)) {
+                pnlPct = totalRet * 100;
+              } else if (initial > 0) {
+                const finalVal =
+                  (m.final_value as number | undefined) ?? initial;
+                pnlPct = ((finalVal / initial) - 1) * 100;
+              }
+              let sharpe: number | null = null;
+              const s1 = m.sharpe as number | undefined;
+              const s2 = m.sharpe_ratio as number | undefined;
+              if (typeof s1 === "number" && Number.isFinite(s1)) {
+                sharpe = s1;
+              } else if (typeof s2 === "number" && Number.isFinite(s2)) {
+                sharpe = s2;
+              }
+              metricsById[p.id] = { pnlPct, sharpe };
+            } catch {
+              // Ignore per-portfolio errors; we still show the row without metrics.
+            }
+          })
+        );
+        setLatestMetrics(metricsById);
         setLoadState("success");
       } catch (error) {
         setLoadState("error");
@@ -199,6 +249,10 @@ export const PortfolioListPage = () => {
         .filter((name) => Boolean(name));
 
       const status: "active" | "archived" = "active";
+      const metrics = latestMetrics[p.id] ?? {
+        pnlPct: null,
+        sharpe: null
+      };
 
       return {
         id: p.id,
@@ -206,12 +260,12 @@ export const PortfolioListPage = () => {
         name: p.name,
         universeLabel: formatUniverseLabel(p.universe_scope, groups),
         strategyNames,
-        lastPnlPct: null,
-        sharpe: null,
+        lastPnlPct: metrics.pnlPct,
+        sharpe: metrics.sharpe,
         status
       };
     });
-  }, [portfolios, groups, strategyNameById]);
+  }, [portfolios, groups, strategyNameById, latestMetrics]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {

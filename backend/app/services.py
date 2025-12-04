@@ -1652,7 +1652,8 @@ class OptimizerService:
             msg = "Portfolio universe resolved to an empty symbol list"
             raise ValueError(msg)
 
-        # Compute or load factor exposures and risk model.
+        # Compute factor exposures for the full universe; some names may be
+        # dropped later if insufficient price history is available.
         exposures_by_symbol = self._factor_service.compute_and_store_exposures(
             meta_db=meta_db,
             prices_db=prices_db,
@@ -1660,16 +1661,76 @@ class OptimizerService:
             as_of_date=as_of_date,
             timeframe="1d",
         )
+
+        # Load returns up-front so we can identify symbols with usable history.
+        returns_by_symbol = self._risk_service._load_returns_matrix(  # type: ignore[attr-defined]
+            prices_db,
+            symbols=symbols,
+            timeframe="1d",
+            as_of=as_of_date,
+        )
+        symbols_with_prices = [s for s in symbols if s in returns_by_symbol]
+        if not symbols_with_prices:
+            # Fall back to equal-weight with zero risk metrics when no
+            # historical data is available for any universe member.
+            weights_arr = self._equal_weight(len(symbols))
+            risk_metrics = {
+                "volatility": 0.0,
+                "expected_return": 0.0,
+                "sharpe": 0.0,
+                "beta": 0.0,
+                "risk_free_rate": 0.0,
+            }
+            diagnostics: Dict[str, object] = {
+                "optimizer_type": optimizer_type,
+                "universe_size": len(symbols),
+                "note": "Fell back to equal-weight: no price history for optimisation.",
+            }
+            stocks = (
+                meta_db.query(Stock)
+                .filter(Stock.symbol.in_(symbols))  # type: ignore[arg-type]
+                .all()
+            )
+            sector_by_symbol = {s.symbol: s.sector for s in stocks}
+            weight_dicts: list[dict] = []
+            for i, sym in enumerate(symbols):
+                weight_dicts.append(
+                    {
+                        "symbol": sym,
+                        "weight": float(weights_arr[i]),
+                        "sector": sector_by_symbol.get(sym),
+                    }
+                )
+
+            agg_exposures: Dict[str, float] = {}
+            factor_names = ["value", "quality", "momentum", "low_vol", "size"]
+            for name in factor_names:
+                total = 0.0
+                for i, sym in enumerate(symbols):
+                    exposure = exposures_by_symbol.get(sym)
+                    if exposure is None:
+                        continue
+                    val = getattr(exposure, name, None)
+                    if val is None:
+                        continue
+                    total += float(weights_arr[i]) * float(val)
+                agg_exposures[name] = total
+
+            return weight_dicts, risk_metrics, agg_exposures, diagnostics
+
+        # Restrict optimiser universe to symbols with sufficient price history.
+        symbols_for_opt = symbols_with_prices
+
+        # Compute or load risk model and covariance matrix for the usable subset.
         self._risk_service.compute_and_store_risk(
             meta_db=meta_db,
             prices_db=prices_db,
-            symbols=symbols,
+            symbols=symbols_for_opt,
             as_of_date=as_of_date,
             timeframe="1d",
         )
 
-        # Fetch covariance matrix blob.
-        universe_hash = self._risk_service._universe_hash(symbols)
+        universe_hash = self._risk_service._universe_hash(symbols_for_opt)
         cov_row = (
             meta_db.query(CovarianceMatrix)
             .filter(
@@ -1689,21 +1750,16 @@ class OptimizerService:
 
         cov = np.array(cov_matrix, dtype=float)
         n = cov.shape[0]
-        if n != len(symbols):
-            msg = "Covariance matrix dimension mismatch with universe size"
+        if n != len(symbols_for_opt):
+            msg = "Covariance matrix dimension mismatch with optimisation subset"
             raise ValueError(msg)
 
         # Expected returns: simple annualised mean return estimate from
-        # historical daily returns.
-        returns_by_symbol = self._risk_service._load_returns_matrix(  # type: ignore[attr-defined]
-            prices_db,
-            symbols=symbols,
-            timeframe="1d",
-            as_of=as_of_date,
-        )
+        # historical daily returns, restricted to the symbols actually
+        # included in the covariance universe.
         mu_vec: list[float] = []
         vol_vec: list[float] = []
-        for sym in symbols:
+        for sym in symbols_for_opt:
             rets = returns_by_symbol.get(sym, [])
             if rets:
                 mu_daily = statistics.fmean(rets)
@@ -1789,14 +1845,21 @@ class OptimizerService:
         )
         portfolio_vol = math.sqrt(portfolio_var) if portfolio_var > 0.0 else 0.0
         portfolio_return = float(mu @ weights_arr)
-        sharpe = portfolio_return / portfolio_vol if portfolio_vol > 0.0 else 0.0
+        # Use portfolio-specific risk-free rate when configured.
+        risk_profile = portfolio.risk_profile_json or {}
+        try:
+            risk_free_rate = float(risk_profile.get("risk_free_rate") or 0.0)
+        except (TypeError, ValueError):
+            risk_free_rate = 0.0
+        excess_return = portfolio_return - risk_free_rate
+        sharpe = excess_return / portfolio_vol if portfolio_vol > 0.0 else 0.0
 
         # Aggregate beta using stored RiskModel rows.
         betas: Dict[str, float] = {}
         risk_rows = (
             meta_db.query(RiskModel)
             .filter(
-                RiskModel.symbol.in_(symbols),  # type: ignore[arg-type]
+                RiskModel.symbol.in_(symbols_for_opt),  # type: ignore[arg-type]
                 RiskModel.as_of_date == as_of_date,
             )
             .all()
@@ -1805,7 +1868,10 @@ class OptimizerService:
             if row.beta is not None:
                 betas[row.symbol] = float(row.beta)
         portfolio_beta = float(
-            sum(weights_arr[i] * betas.get(sym, 0.0) for i, sym in enumerate(symbols))
+            sum(
+                weights_arr[i] * betas.get(sym, 0.0)
+                for i, sym in enumerate(symbols_for_opt)
+            )
         )
 
         risk_metrics = {
@@ -1813,6 +1879,7 @@ class OptimizerService:
             "expected_return": portfolio_return,
             "sharpe": sharpe,
             "beta": portfolio_beta,
+            "risk_free_rate": risk_free_rate,
         }
 
         # Portfolio-level factor exposures as weighted averages.
@@ -1820,7 +1887,7 @@ class OptimizerService:
         factor_names = ["value", "quality", "momentum", "low_vol", "size"]
         for name in factor_names:
             total = 0.0
-            for i, sym in enumerate(symbols):
+            for i, sym in enumerate(symbols_for_opt):
                 exposure = exposures_by_symbol.get(sym)
                 if exposure is None:
                     continue
@@ -1833,6 +1900,7 @@ class OptimizerService:
         diagnostics: Dict[str, object] = {
             "optimizer_type": optimizer_type,
             "universe_size": len(symbols),
+            "optimisation_symbols": symbols_for_opt,
         }
         if constraints is not None:
             diagnostics["constraints_applied"] = {
@@ -1841,19 +1909,45 @@ class OptimizerService:
             }
 
         weight_dicts: list[dict] = []
-        # Fetch basic sector metadata for reporting.
+        # Fetch basic sector and factor metadata for reporting.
         stocks = (
             meta_db.query(Stock)
-            .filter(Stock.symbol.in_(symbols))  # type: ignore[arg-type]
+            .filter(Stock.symbol.in_(symbols_for_opt))  # type: ignore[arg-type]
             .all()
         )
         sector_by_symbol = {s.symbol: s.sector for s in stocks}
-        for i, sym in enumerate(symbols):
+        for i, sym in enumerate(symbols_for_opt):
+            factor_row = exposures_by_symbol.get(sym)
             weight_dicts.append(
                 {
                     "symbol": sym,
                     "weight": float(weights_arr[i]),
                     "sector": sector_by_symbol.get(sym),
+                    "value": (
+                        getattr(factor_row, "value", None)
+                        if factor_row is not None
+                        else None
+                    ),
+                    "quality": (
+                        getattr(factor_row, "quality", None)
+                        if factor_row is not None
+                        else None
+                    ),
+                    "momentum": (
+                        getattr(factor_row, "momentum", None)
+                        if factor_row is not None
+                        else None
+                    ),
+                    "low_vol": (
+                        getattr(factor_row, "low_vol", None)
+                        if factor_row is not None
+                        else None
+                    ),
+                    "size": (
+                        getattr(factor_row, "size", None)
+                        if factor_row is not None
+                        else None
+                    ),
                 }
             )
 

@@ -137,6 +137,13 @@ def _seed_portfolio_universe(as_of: date) -> tuple[int, list[str]]:
             session.add(portfolio)
             session.commit()
             session.refresh(portfolio)
+        else:
+            # Keep the universe_scope in sync with the test group so that
+            # repeated runs against a persistent dev DB do not reference a
+            # deleted group id.
+            portfolio.universe_scope = f"group:{group.id}"
+            session.add(portfolio)
+            session.commit()
 
         portfolio_id = portfolio.id
     finally:

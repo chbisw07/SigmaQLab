@@ -35,7 +35,8 @@ import {
   PolarAngleAxis,
   PolarGrid,
   XAxis,
-  YAxis
+  YAxis,
+  Cell
 } from "recharts";
 import { useEffect, useMemo, useState, FormEvent, SyntheticEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -108,6 +109,19 @@ type HoldingRow = {
 };
 
 const API_BASE = "http://127.0.0.1:8000";
+
+const SECTOR_COLORS = [
+  "#1976d2",
+  "#9c27b0",
+  "#ff9800",
+  "#2e7d32",
+  "#f44336",
+  "#00838f",
+  "#5d4037",
+  "#7b1fa2",
+  "#c0ca33",
+  "#ff7043"
+];
 
 const formatDateTime = (iso: string) => {
   try {
@@ -187,6 +201,7 @@ export const PortfolioDetailPage = () => {
   const [maxPosPct, setMaxPosPct] = useState("20");
   const [maxPositions, setMaxPositions] = useState("10");
   const [ddTolerance, setDdTolerance] = useState("0");
+  const [riskFreeRate, setRiskFreeRate] = useState("0.0");
   const [productType, setProductType] =
     useState<"delivery" | "intraday" | "hybrid">("delivery");
   const [rebalanceFrequency, setRebalanceFrequency] = useState("monthly");
@@ -223,11 +238,16 @@ export const PortfolioDetailPage = () => {
   const [targetVolatility, setTargetVolatility] = useState<string>("");
   const [maxBeta, setMaxBeta] = useState<string>("");
   const [turnoverLimit, setTurnoverLimit] = useState<string>("");
+  const [riskPreset, setRiskPreset] = useState<
+    "custom" | "conservative" | "moderate" | "aggressive"
+  >("custom");
   const [optState, setOptState] = useState<FetchState>("idle");
   const [optMessage, setOptMessage] = useState<string | null>(null);
   const [optResult, setOptResult] = useState<PortfolioOptimizeResponse | null>(
     null
   );
+  const [previewState, setPreviewState] = useState<FetchState>("idle");
+  const [previewMessage, setPreviewMessage] = useState<string | null>(null);
 
   const selectedUniverseGroup = useMemo(() => {
     if (!universeScope || !universeScope.startsWith("group:")) return null;
@@ -299,6 +319,7 @@ export const PortfolioDetailPage = () => {
           maxConcurrentPositions?: number;
           drawdownTolerancePct?: number;
           productType?: string;
+          risk_free_rate?: number;
         };
         setMaxPosPct(
           risk.maxPositionSizePct != null ? String(risk.maxPositionSizePct) : "20"
@@ -312,6 +333,9 @@ export const PortfolioDetailPage = () => {
           risk.drawdownTolerancePct != null
             ? String(risk.drawdownTolerancePct)
             : "0"
+        );
+        setRiskFreeRate(
+          risk.risk_free_rate != null ? String(risk.risk_free_rate) : "0.0"
         );
         if (risk.productType === "intraday") {
           setProductType("intraday");
@@ -467,6 +491,10 @@ export const PortfolioDetailPage = () => {
     if (Number.isFinite(ddTolNum) && ddTolNum > 0) {
       risk_profile.drawdownTolerancePct = ddTolNum;
     }
+    const rfNum = Number(riskFreeRate);
+    if (Number.isFinite(rfNum) && rfNum >= 0) {
+      risk_profile.risk_free_rate = rfNum;
+    }
     risk_profile.productType = productType;
 
     const payload: Record<string, unknown> = {
@@ -548,6 +576,7 @@ export const PortfolioDetailPage = () => {
       maxConcurrentPositions?: number;
       drawdownTolerancePct?: number;
       productType?: string;
+      risk_free_rate?: number;
     };
     setMaxPosPct(
       risk.maxPositionSizePct != null ? String(risk.maxPositionSizePct) : "20"
@@ -561,6 +590,9 @@ export const PortfolioDetailPage = () => {
       risk.drawdownTolerancePct != null
         ? String(risk.drawdownTolerancePct)
         : "0"
+    );
+    setRiskFreeRate(
+      risk.risk_free_rate != null ? String(risk.risk_free_rate) : "0.0"
     );
     if (risk.productType === "intraday") {
       setProductType("intraday");
@@ -1059,6 +1091,70 @@ export const PortfolioDetailPage = () => {
     }
   };
 
+  const handleRunPreviewBacktest = async () => {
+    if (!portfolio) {
+      setPreviewState("error");
+      setPreviewMessage("Save portfolio settings before running a preview.");
+      return;
+    }
+    if (!constructionAsOfDate) {
+      setPreviewState("error");
+      setPreviewMessage("As-of date is required for preview.");
+      return;
+    }
+    setPreviewState("loading");
+    setPreviewMessage(null);
+
+    const endIso = constructionAsOfDate;
+    const endDate = new Date(endIso);
+    if (Number.isNaN(endDate.getTime())) {
+      setPreviewState("error");
+      setPreviewMessage("Invalid as-of date for preview.");
+      return;
+    }
+    const startDate = new Date(endDate);
+    startDate.setFullYear(startDate.getFullYear() - 1);
+    const startIso = startDate.toISOString().slice(0, 10);
+
+    const params = new URLSearchParams({
+      timeframe: "1d",
+      start: `${startIso}T00:00:00`,
+      end: `${endIso}T23:59:00`,
+      initial_capital: "100000"
+    });
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/portfolios/${portfolio.id}/backtests?${params.toString()}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setPreviewState("error");
+        setPreviewMessage(
+          (err as { detail?: string }).detail ??
+            "Failed to run preview portfolio backtest."
+        );
+        return;
+      }
+      const created: PortfolioBacktest = await res.json();
+      setBacktests((prev) => [created, ...prev]);
+      setSelectedBacktestId(created.id);
+      setSelectedBacktest(created);
+      setPreviewState("success");
+      setPreviewMessage(
+        `Preview backtest #${created.id} completed (${startIso} → ${endIso}).`
+      );
+    } catch (error) {
+      setPreviewState("error");
+      setPreviewMessage(
+        error instanceof Error
+          ? error.message
+          : "Unexpected error running preview backtest."
+      );
+    }
+  };
+
   const renderConstructionTab = () => {
     if (!portfolio || isNew) {
       return (
@@ -1085,11 +1181,15 @@ export const PortfolioDetailPage = () => {
       {
         field: "weight",
         headerName: "Weight",
-        width: 120,
-        valueFormatter: (params) =>
-          params.value != null ? `${(params.value as number).toFixed(4)}` : ""
+        width: 130,
+        type: "number",
+        renderCell: (params: GridRenderCellParams<any, number>) => {
+          const value = params.value;
+          if (value == null) return "";
+          return value.toFixed(4);
+        }
       },
-      { field: "sector", headerName: "Sector", width: 140 }
+      { field: "sector", headerName: "Sector", width: 160 }
     ];
 
     const sectorData = Object.values(
@@ -1152,40 +1252,88 @@ export const PortfolioDetailPage = () => {
                     onChange={(e) => setConstructionAsOfDate(e.target.value)}
                     InputLabelProps={{ shrink: true }}
                   />
+                  <TextField
+                    select
+                    label="Risk profile preset"
+                    size="small"
+                    value={riskPreset}
+                    onChange={(e) => {
+                      const preset = e.target
+                        .value as "custom" | "conservative" | "moderate" | "aggressive";
+                      setRiskPreset(preset);
+                      if (preset === "conservative") {
+                        setMinWeight("0");
+                        setMaxWeight("0.05");
+                        setTargetVolatility("0.12");
+                        setMaxBeta("0.8");
+                        setTurnoverLimit("0.2");
+                      } else if (preset === "moderate") {
+                        setMinWeight("0");
+                        setMaxWeight("0.10");
+                        setTargetVolatility("0.16");
+                        setMaxBeta("1.0");
+                        setTurnoverLimit("0.4");
+                      } else if (preset === "aggressive") {
+                        setMinWeight("0");
+                        setMaxWeight("0.15");
+                        setTargetVolatility("0.22");
+                        setMaxBeta("1.2");
+                        setTurnoverLimit("0.8");
+                      }
+                    }}
+                    helperText="Optional preset for min/max weight, target vol, beta, turnover."
+                  >
+                    <MenuItem value="custom">(Custom)</MenuItem>
+                    <MenuItem value="conservative">Conservative</MenuItem>
+                    <MenuItem value="moderate">Moderate</MenuItem>
+                    <MenuItem value="aggressive">Aggressive</MenuItem>
+                  </TextField>
                   <Stack direction="row" spacing={2}>
                     <TextField
                       label="Min weight per stock"
                       type="number"
                       size="small"
                       value={minWeight}
-                      onChange={(e) => setMinWeight(e.target.value)}
-                      helperText="Fraction (e.g. 0, 0.01)"
+                      onChange={(e) => {
+                        setMinWeight(e.target.value);
+                        setRiskPreset("custom");
+                      }}
+                      helperText="Fraction of portfolio (0–1, e.g. 0.01 = 1%)"
                     />
                     <TextField
                       label="Max weight per stock"
                       type="number"
                       size="small"
                       value={maxWeight}
-                      onChange={(e) => setMaxWeight(e.target.value)}
-                      helperText="Fraction (e.g. 0.1 = 10%)"
+                      onChange={(e) => {
+                        setMaxWeight(e.target.value);
+                        setRiskPreset("custom");
+                      }}
+                      helperText="Fraction of portfolio (0–1, e.g. 0.1 = 10%)"
                     />
                   </Stack>
                   <Stack direction="row" spacing={2}>
                     <TextField
-                      label="Target volatility"
+                      label="Target volatility (annualised)"
                       type="number"
                       size="small"
                       value={targetVolatility}
-                      onChange={(e) => setTargetVolatility(e.target.value)}
-                      helperText="Optional annualised vol target"
+                      onChange={(e) => {
+                        setTargetVolatility(e.target.value);
+                        setRiskPreset("custom");
+                      }}
+                      helperText="Optional annualised σ (fraction, e.g. 0.15 ≈ 15%)"
                     />
                     <TextField
                       label="Max beta"
                       type="number"
                       size="small"
                       value={maxBeta}
-                      onChange={(e) => setMaxBeta(e.target.value)}
-                      helperText="Optional portfolio beta cap"
+                      onChange={(e) => {
+                        setMaxBeta(e.target.value);
+                        setRiskPreset("custom");
+                      }}
+                      helperText="Optional portfolio beta cap vs benchmark"
                     />
                   </Stack>
                   <TextField
@@ -1193,8 +1341,11 @@ export const PortfolioDetailPage = () => {
                     type="number"
                     size="small"
                     value={turnoverLimit}
-                    onChange={(e) => setTurnoverLimit(e.target.value)}
-                    helperText="Optional per-rebalance turnover cap"
+                    onChange={(e) => {
+                      setTurnoverLimit(e.target.value);
+                      setRiskPreset("custom");
+                    }}
+                    helperText="Optional per‑rebalance turnover cap (sum |Δw|, 0–2)"
                   />
                   <Stack direction="row" spacing={1}>
                     <Button
@@ -1217,6 +1368,14 @@ export const PortfolioDetailPage = () => {
                     >
                       Save weights
                     </Button>
+                    <Button
+                      variant="text"
+                      size="small"
+                      onClick={() => void handleRunPreviewBacktest()}
+                      disabled={previewState === "loading"}
+                    >
+                      Run 1Y equity preview
+                    </Button>
                   </Stack>
                   {optMessage && (
                     <Typography
@@ -1224,6 +1383,14 @@ export const PortfolioDetailPage = () => {
                       color={optState === "error" ? "error" : "text.secondary"}
                     >
                       {optMessage}
+                    </Typography>
+                  )}
+                  {previewMessage && (
+                    <Typography
+                      variant="body2"
+                      color={previewState === "error" ? "error" : "text.secondary"}
+                    >
+                      {previewMessage}
                     </Typography>
                   )}
                 </Stack>
@@ -1278,7 +1445,15 @@ export const PortfolioDetailPage = () => {
                               cy="50%"
                               outerRadius={80}
                               label
-                            />
+                            >
+                              {sectorData.map((entry, index) => (
+                                <Cell
+                                  // eslint-disable-next-line react/no-array-index-key
+                                  key={index}
+                                  fill={SECTOR_COLORS[index % SECTOR_COLORS.length]}
+                                />
+                              ))}
+                            </Pie>
                             <RechartsTooltip />
                           </PieChart>
                         </ResponsiveContainer>
@@ -1325,7 +1500,7 @@ export const PortfolioDetailPage = () => {
                           color="text.secondary"
                           display="block"
                         >
-                          Volatility
+                          Volatility (annualised, σ)
                         </Typography>
                         <Typography variant="h6">
                           {((risk.volatility as number | undefined) ?? 0).toFixed(4)}
@@ -1337,7 +1512,7 @@ export const PortfolioDetailPage = () => {
                           color="text.secondary"
                           display="block"
                         >
-                          Expected return
+                          Expected return (annualised)
                         </Typography>
                         <Typography variant="h6">
                           {((risk.expected_return as number | undefined) ?? 0).toFixed(
@@ -1351,7 +1526,7 @@ export const PortfolioDetailPage = () => {
                           color="text.secondary"
                           display="block"
                         >
-                          Sharpe
+                          Sharpe ratio
                         </Typography>
                         <Typography variant="h6">
                           {((risk.sharpe as number | undefined) ?? 0).toFixed(3)}
@@ -1363,13 +1538,44 @@ export const PortfolioDetailPage = () => {
                           color="text.secondary"
                           display="block"
                         >
-                          Beta
+                          Beta (vs benchmark)
                         </Typography>
                         <Typography variant="h6">
                           {((risk.beta as number | undefined) ?? 0).toFixed(3)}
                         </Typography>
                       </Grid>
                     </Grid>
+                  </CardContent>
+                </Card>
+              </Grid>
+              <Grid item xs={12}>
+                <Card>
+                  <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                      Equity preview (latest portfolio backtest)
+                    </Typography>
+                    {equitySeries.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        Run a preview backtest or use the Backtests tab to see
+                        the optimised portfolio equity curve.
+                      </Typography>
+                    ) : (
+                      <Box sx={{ height: 220 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={equitySeries}>
+                            <XAxis dataKey="time" hide />
+                            <YAxis />
+                            <RechartsTooltip />
+                            <Line
+                              type="monotone"
+                              dataKey="equity"
+                              stroke="#42a5f5"
+                              dot={false}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </Box>
+                    )}
                   </CardContent>
                 </Card>
               </Grid>
@@ -1525,6 +1731,16 @@ export const PortfolioDetailPage = () => {
                   fullWidth
                   value={ddTolerance}
                   onChange={(e) => setDdTolerance(e.target.value)}
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  label="Risk-free rate (annual, fraction)"
+                  size="small"
+                  fullWidth
+                  value={riskFreeRate}
+                  onChange={(e) => setRiskFreeRate(e.target.value)}
+                  helperText="Used for Sharpe/Max‑Sharpe, e.g. 0.0655 = 6.55%"
                 />
               </Grid>
 
